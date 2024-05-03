@@ -1,0 +1,76 @@
+{
+  "streams": [
+    {
+      "stream": {
+          "name": "/DMO/FLIGHT",
+          "json_schema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "properties": {
+              "CLIENT": {
+                "type": "string",
+                "length": 3,
+                "decimals": 0,
+                "description": ""
+              },
+              "CARRIER_ID": {
+                "type": "string",
+                "length": 3,
+                "decimals": 0,
+                "description": "Flight Reference Scenario: Carrier ID"
+              },
+              "CONNECTION_ID": {
+                "type": "string",
+                "length": 4,
+                "decimals": 0,
+                "description": "Flight Reference Scenario: Connection ID"
+              },
+              "FLIGHT_DATE": {
+                "type": "string",
+                "length": 8,
+                "decimals": 0,
+                "description": "Flight Reference Scenario: Flight Date"
+              },
+              "PRICE": {
+                "type": "number",
+                "length": 16,
+                "decimals": 2,
+                "description": "Flight Reference Scenario: Flight Price"
+              },
+              "CURRENCY_CODE": {
+                "type": "string",
+                "length": 5,
+                "decimals": 0,
+                "description": "Flight Reference Scenario: Currency Code"
+              },
+              "PLANE_TYPE_ID": {
+                "type": "string",
+                "length": 10,
+                "decimals": 0,
+                "description": "Flight Reference Scenario: Plane Type ID"
+              },
+              "SEATS_MAX": {
+                "type": "integer",
+                "length": 10,
+                "decimals": 0,
+                "description": "Flight Reference Scenario: Plane Seats Max"
+              },
+              "SEATS_OCCUPIED": {
+                "type": "integer",
+                "length": 10,
+                "decimals": 0,
+                "description": "Flight Reference Scenario: Plane Seats Occupied"
+              }
+            }
+          },
+          "supported_sync_modes": ["full_refresh"],
+          "table_type": "TRANSP",
+          "text": "Flight Reference Scenario: Flight"
+      },
+      "sync_mode": "full_refresh",
+      "destination_sync_mode": "overwrite"
+    }
+  ]
+}
+
+

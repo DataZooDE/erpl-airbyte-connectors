@@ -1,0 +1,9 @@
+*
+!Dockerfile
+!Dockerfile.test
+!source_sapreadtable
+!main.py
+!pyproject.toml
+!README.md
+!integration_tests
+!secrets

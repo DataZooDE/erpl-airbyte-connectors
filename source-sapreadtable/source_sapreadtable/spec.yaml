@@ -1,0 +1,44 @@
+documentationUrl: https://docsurl.com
+connectionSpecification:
+  $schema: http://json-schema.org/draft-07/schema#
+  title: SAP RFC Read Table based on ERPL & DuckDB
+  type: object
+  required:
+    - sap_ashost
+    - sap_sysnr
+    - sap_user
+    - sap_password
+    - sap_client
+  properties:
+    custom_extension_repository:
+      type: string
+      description: 'The URL to the custom DuckDB extension repository hosting the ERPL extension.'
+      default: 'http://get.erpl.io'
+    extension_name:
+      type: string
+      description: 'The name of the ERPL extension to use.'
+      default: 'erpl'
+    sap_ashost:
+      type: string
+      description: 'The host name of the SAP system.'
+    sap_sysnr:
+      type: string
+      description: 'The system number of the SAP system.'
+    sap_user:
+      type: string
+      description: 'The username to use to connect to the SAP system.'
+      airbyte_secret: true
+    sap_password:
+      type: string
+      description: 'The password to use to connect to the SAP system.'
+      airbyte_secret: true
+    sap_client:
+      type: string
+      description: 'The client number to use to connect to the SAP system.'
+    sap_lang:
+      type: string
+      description: 'The language to use to connect to the SAP system.'
+      default: 'EN'
+    table_selection:
+      type: string
+      description: 'The name of a single table or a selection containing a wildcard "*".'
