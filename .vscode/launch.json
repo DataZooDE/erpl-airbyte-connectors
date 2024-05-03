@@ -1,0 +1,32 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "'Discover' RFC Tables",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/source-sapreadtable/main.py",
+            "console": "integratedTerminal",
+            "args": "discover --config ${workspaceFolder}/source-sapreadtable/secrets/config.json"
+        },
+        {
+            "name": "'Read' RFC Tables",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/source-sapreadtable/main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "read",
+                "--config",
+                "${workspaceFolder}/source-sapreadtable/secrets/config.json",
+                "--catalog",
+                "${workspaceFolder}/source-sapreadtable/integration_tests/configured_catalog.json"
+            ]
+        }
+    ]
+}
+
+
