@@ -25,50 +25,7 @@ from airbyte_cdk.models import (
     Type
 )
 from airbyte_cdk.sources import Source
-from airbyte_cdk.sources.streams import Stream
-from airbyte_cdk.sources.streams.http import HttpStream
-from airbyte_cdk.sources.streams.http.requests_native_auth import TokenAuthenticator
 
-
-class ErplRfcTableStreamStream(Stream):
-    def __init__(self, 
-                 technical_name: str, 
-                 text: str, 
-                 table_type: str, 
-                 con: duckdb.DuckDBPyConnection) -> None:
-        super().__init__()
-        self._technical_name = technical_name
-        self._text = text
-        self._table_type = table_type
-        self._con = con
-
-    @property
-    def name(self) -> str:
-        return self._technical_name
-    
-    @property
-    def text(self) -> str:
-        return self._text
-    
-    @property
-    def table_type(self) -> str:
-        return self._table_type
-
-    @lru_cache(maxsize=None)
-    def get_json_schema(self) -> Mapping[str, Any]:
-        json_schema = {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "properties": {"id": {"type": "string"}, "body": {"type": "string"}, "attributes": {"type": ["object", "null"]}},
-        }
-
-        return json_schema
-
-    @property
-    def primary_key(self) -> Optional[Union[str, List[str], List[List[str]]]]:
-        return None
-    
-# ----------------------------------------------------------------------------
 
 class SourceRfcReadTable(Source):
     def check(self, logger: AirbyteLogger, config: json) -> AirbyteConnectionStatus:
@@ -104,7 +61,7 @@ class SourceRfcReadTable(Source):
         
         return AirbyteCatalog(streams=streams)
 
-    def _convert_row_to_stream(self, row: Mapping[str, Any], logger: AirbyteLogger, config: json, con: duckdb.DuckDBPyConnection) -> ErplRfcTableStreamStream:
+    def _convert_row_to_stream(self, row: Mapping[str, Any], logger: AirbyteLogger, config: json, con: duckdb.DuckDBPyConnection) -> AirbyteStream:
         """
         Convert a row from the result of sap_show_tables into an AirbyteStream object.
         :param row: A row from the result of sap_show_tables
@@ -206,7 +163,7 @@ class SourceRfcReadTable(Source):
                 yield message
         
 
-    def _read_stream(self, logger: AirbyteLogger, config: json, stream: ErplRfcTableStreamStream, con: duckdb.DuckDBPyConnection, state: Dict[str, any]) -> Generator[AirbyteMessage, None, None]:
+    def _read_stream(self, logger: AirbyteLogger, config: json, stream: AirbyteStream, con: duckdb.DuckDBPyConnection, state: Dict[str, any]) -> Generator[AirbyteMessage, None, None]:
         """
         Read a stream from ERPL.
         :param logger: The logger object
@@ -223,7 +180,7 @@ class SourceRfcReadTable(Source):
             msg = self._convert_row_to_message(res.columns, row[0], stream)
             yield msg
             
-    def _convert_row_to_message(self, columns: List[str], row: List[Any], stream: ErplRfcTableStreamStream) -> AirbyteMessage:
+    def _convert_row_to_message(self, columns: List[str], row: List[Any], stream: AirbyteStream) -> AirbyteMessage:
         """
         Convert a row from ERPL to an AirbyteMessage.
         :param row: The row to convert
