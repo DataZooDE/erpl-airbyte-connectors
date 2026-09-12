@@ -54,6 +54,25 @@ interfaces, selected by a `protocol` choice in the spec.
 - `metadata.yaml` carried Airbyte's own `source-duckdb` definition ID, docker
   repository and documentation URL.
 
+### Security
+
+- The ERPL extensions are fetched over HTTPS and verified against pinned
+  sha256 checksums; an unpinned or mismatched artifact fails the build.
+- ODP OData entity-set URLs are confined to the configured Gateway host, so a
+  config value cannot redirect the connector at another host using the
+  Gateway's credentials.
+- The OData connection check authenticates through the URL-scoped secret rather
+  than an inline credential, keeping the password out of DuckDB error text.
+- `cursor_field` — the one identifier interpolated into an ABAP WHERE fragment —
+  is validated against the field list SAP reported for the table.
+- `concurrency`, `partitions`, `threads`, `fetch_size` and `max_page_size` are
+  clamped to their documented ranges, so a hand-edited config cannot exhaust the
+  SAP system's work processes.
+- Two ODP objects that resolve to the same subscriber process are refused: they
+  would share one SAP delta subscription and consume each other's changes.
+- The connector warns when RFC runs without SNC, or the Gateway URL is plain
+  http, because the password then travels in the clear.
+
 ### Known limitations
 
 - The image is `linux/amd64` only — ERPL publishes no arm64 build.

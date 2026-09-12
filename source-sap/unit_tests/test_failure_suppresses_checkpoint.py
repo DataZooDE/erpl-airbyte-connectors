@@ -78,3 +78,25 @@ def test_a_cursor_without_mark_failed_is_tolerated():
     partition = ErplPartition("S", session, ReadPlan(sql="SELECT 1"), None, cursor=MagicMock(spec=[]))
     with pytest.raises(AirbyteTracedException):
         list(partition.read())
+
+
+def test_partitions_built_by_the_generator_carry_the_cursor():
+    """Regression: the generator used to drop the cursor, so nothing could mark
+    the run failed and a broken delta sync still checkpointed."""
+    from source_sap.streams import build_stream
+
+    cursor, repo, _ = _cursor()
+    driver = MagicMock()
+    driver.prepare = None
+    driver.read_plans.return_value = [ReadPlan(sql="SELECT 1")]
+    driver.concurrency_group.return_value = ""
+    obj = SapObject(name="S", json_schema={}, meta={})
+
+    stream = build_stream(_exploding_session(), driver, obj, cursor, incremental=True, state={})
+    partitions = list(stream.generate_partitions())
+    assert partitions
+
+    with pytest.raises(AirbyteTracedException):
+        list(partitions[0].read())
+    cursor.ensure_at_least_one_state_emitted()
+    assert list(repo.consume_queue()) == [], "a failed generated partition must suppress state"

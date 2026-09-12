@@ -9,6 +9,7 @@ what makes slices independently readable.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from collections.abc import Mapping, Sequence
@@ -16,7 +17,7 @@ from typing import Any
 
 from source_sap.duck import schema_from_description
 from source_sap.errors import config_error, traced
-from source_sap.protocols.base import ProtocolDriver, ReadPlan, SapObject, quote_identifier
+from source_sap.protocols.base import ProtocolDriver, ReadPlan, SapObject, sql_string_literal
 from source_sap.retry import retry_transient
 from source_sap.session import ErplSession
 
@@ -36,21 +37,42 @@ _TOTAL_LABELS = {
 
 
 def _lit(value: Any) -> str:
-    return quote_identifier(str(value))
+    return sql_string_literal(str(value))
 
 
-def is_grand_total_row(record: Mapping[str, Any], row_axis_fields: Sequence[str]) -> bool:
-    """True when a BICS row is BW's grand total rather than a data row."""
-    for field in row_axis_fields:
+def is_grand_total_row(record: Mapping[str, Any], row_axis_fields: Sequence[str] | None = None) -> bool:
+    """True when a BICS row is BW's grand total rather than a data row.
+
+    When the row axis is known, only those columns are examined -- a key figure
+    that happens to read "Result" must not drop the row. When it is not (no
+    `rows` configured), every string column is checked, because emitting the
+    total as a fact is worse than the small chance of dropping a real row whose
+    characteristic value is literally "Overall Result".
+    """
+    fields = list(row_axis_fields) if row_axis_fields else list(record)
+    for field in fields:
         value = record.get(field)
         if isinstance(value, str) and value.strip().upper() in _TOTAL_LABELS:
             return True
     return False
 
 
-def _session_id(stream_name: str, suffix: str = "") -> str:
-    base = re.sub(r"[^A-Za-z0-9]+", "_", stream_name).strip("_").lower()
-    return f"abyte_{base}{('_' + suffix) if suffix else ''}"[:40]
+_MAX_SESSION_ID = 40
+_SESSION_PREFIX = "abyte_"
+
+
+def session_id_for(stream_name: str, suffix: str = "") -> str:
+    """A distinct BICS session id per stream, and per slice within a stream.
+
+    The discriminator is budgeted *before* truncation. Appending it and then
+    truncating -- which is the obvious way to write this -- silently gives every
+    slice of a long-named BW query the same id, and the Concurrent CDK reads
+    slices in parallel, so their sessions would interleave on the server.
+    """
+    digest = hashlib.sha1(f"{stream_name}|{suffix}".encode()).hexdigest()[:8]
+    readable = re.sub(r"[^A-Za-z0-9]+", "_", stream_name).strip("_").lower()
+    budget = _MAX_SESSION_ID - len(_SESSION_PREFIX) - len(digest) - 1
+    return f"{_SESSION_PREFIX}{readable[:budget]}_{digest}"
 
 
 class BicsDriver(ProtocolDriver):
@@ -89,7 +111,7 @@ class BicsDriver(ProtocolDriver):
                     meta={
                         "cube": cube,
                         "query": override.get("query"),
-                        "session_id": _session_id(name),
+                        "session_id": session_id_for(name),
                         "row_axis": list(override.get("rows") or []),
                     },
                 )
@@ -105,7 +127,7 @@ class BicsDriver(ProtocolDriver):
             meta={
                 "cube": cube,
                 "query": override.get("query"),
-                "session_id": _session_id(name, "d"),
+                "session_id": session_id_for(name, "d"),
             },
         )
         statements = self.session_statements(obj)
@@ -264,7 +286,7 @@ class BicsDriver(ProtocolDriver):
                 primary_key=obj.primary_key,
                 supports_incremental=obj.supports_incremental,
                 change_mode_field=obj.change_mode_field,
-                meta={**obj.meta, "session_id": _session_id(obj.name, str(member))},
+                meta={**obj.meta, "session_id": session_id_for(obj.name, str(member))},
             )
             statements = self.session_statements(sliced, extra_filter=(characteristic, [member]))
             plans.append(

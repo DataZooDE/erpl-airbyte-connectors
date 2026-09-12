@@ -19,8 +19,10 @@ extensions. One connector covers four SAP interfaces; you pick one per connectio
   `RFC_READ_TABLE` and `DDIF_FIELDINFO_GET` for the RFC protocol, `RODPS_REPL_*`
   for ODP, and the BICS function group for BW.
 - For **SAP ODP (OData)**: the **Gateway Base URL** (for example
-  `https://sap.example.com:44300`) and an activated ODP OData service.
-- If the system sits behind a SAProuter, its **SAProuter String**.
+  `https://sap.example.com:44300`) and an activated ODP OData service. Also set
+  **Gateway Host** (the bare hostname) so the platform can allow egress to it.
+- If the system sits behind a SAProuter, its **SAProuter String**, plus
+  **SAProuter Host** for the same reason.
 
 Either a direct logon (**Application Server Host** + **System Number**) or a
 load-balanced logon (**Message Server Host** + **System ID** + **Logon Group**) is required.
@@ -60,11 +62,19 @@ and registers a subscription. Later runs return only what changed, and deletes
 arrive as `_ab_cdc_deleted_at` tombstones.
 
 :::caution
-The ODP delta position lives **on the SAP system**, keyed by a subscriber process
-that the connector derives from the connection. Deleting the Airbyte connection
-without resetting the stream leaves that subscription registered on SAP, where it
-keeps retaining delta data. Reset the stream before removing a connection, or
-clear the subscription in transaction `ODQMON`.
+The ODP delta position lives **on the SAP system**, in an ODQ subscription keyed
+by a *subscriber process*. Two consequences:
+
+- **Set `subscriber_process` explicitly when more than one Airbyte connection
+  reads the same ODP object from the same SAP system.** The Airbyte protocol
+  gives a connector no connection identifier, so the derived name is built from
+  the SAP logon (system, client, user) and the object. Two connections with the
+  same logon derive the *same* name, share one subscription, and consume each
+  other's changes — each seeing only part of the delta, permanently. The
+  connector logs a warning whenever it derives a name.
+- **Deleting a connection without resetting the stream strands the subscription**
+  on SAP, where it keeps retaining delta data. Reset the stream first, or clear
+  it in transaction `ODQMON`.
 :::
 
 ## Supported streams
@@ -87,6 +97,21 @@ Streams are whatever your pattern and object list select. Stream names are:
 - **BICS cannot paginate** — BW materialises the entire result set or none of it.
   For a large cube, use **Slice By** to run one BICS session per characteristic
   member and bound memory.
+
+## Security notes
+
+- The ERPL extensions are downloaded over HTTPS at **image build time** and
+  verified against checksums pinned in `bin/checksums.txt`; a mismatch fails the
+  build. A sync makes no request to `get.erpl.io`.
+- They are unsigned native code, so DuckDB runs with `allow_unsigned_extensions`.
+  The extension directory is baked into the image and owned by the image user;
+  do not point `ERPL_EXTENSION_DIR` at a directory other users can write.
+- Entity-set URLs for **SAP ODP (OData)** are confined to the configured
+  **Gateway Base URL** — an absolute URL naming another host is rejected rather
+  than fetched with the Gateway's credentials.
+- `snc_mode` defaults to `"0"` (unencrypted RFC), and a plain `http` base URL
+  sends credentials in the clear. Both are fine against a local trial system and
+  wrong against anything else: enable SNC and use `https` in production.
 
 ## Limitations
 

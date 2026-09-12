@@ -111,16 +111,32 @@ def run_connector(
         env.setdefault("LD_LIBRARY_PATH", os.path.join(EXTENSION_DIR, "v1.5.5", "linux_amd64"))
     proc = subprocess.run(args, capture_output=True, text=True, env=env, timeout=1800)
     messages = []
+    unparsed = []
     for line in proc.stdout.splitlines():
         line = line.strip()
+        if not line:
+            continue
         if not line.startswith("{"):
+            unparsed.append(line)
             continue
         try:
             messages.append(json.loads(line))
         except json.JSONDecodeError:
-            continue
-    if not messages and proc.returncode != 0:
-        raise AssertionError(f"connector produced no messages\nstderr:\n{proc.stderr[-4000:]}")
+            unparsed.append(line)
+
+    # A crash after some records were emitted would otherwise slip past an
+    # `errors(messages) == []` assertion, because the traceback is not a protocol
+    # message. Surface a non-zero exit unless the connector reported the failure
+    # properly as an ERROR trace.
+    reported = any(m.get("type") == "TRACE" and m.get("trace", {}).get("type") == "ERROR" for m in messages)
+    if proc.returncode != 0 and not reported:
+        raise AssertionError(
+            f"connector exited {proc.returncode} without an ERROR trace message\n"
+            f"unparsed stdout:\n" + "\n".join(unparsed[-20:]) + "\n"
+            f"stderr:\n{proc.stderr[-4000:]}"
+        )
+    if not messages:
+        raise AssertionError(f"connector produced no messages (exit {proc.returncode})\nstderr:\n{proc.stderr[-4000:]}")
     return messages
 
 

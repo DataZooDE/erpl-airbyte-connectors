@@ -136,6 +136,53 @@ class TestOdpRfc:
         assert errors(second) == []
         assert len(records(second, stream_name)) == 0, "a second delta run must return no changes"
 
+    def test_the_delta_cursor_is_released_after_the_first_run(
+        self, config, tmp_path, odp_target, fresh_odp_subscription, erpl_extensions, sap_rfc_config
+    ):
+        """A DELTAINIT leaves a cursor open on SAP unless the connector closes it.
+
+        `on_success` runs before `next_state`, so on the very first incremental
+        run the Airbyte state blob is still empty -- the cleanup has to fall back
+        to the name the read used.
+        """
+        import duckdb
+
+        context, name = odp_target
+        stream_name = f"{context}/{name}"
+        stream = _discover(config, tmp_path, stream_name)
+        messages = run_connector(
+            "read",
+            config=config,
+            catalog=_catalog(stream_name, stream["json_schema"], "incremental"),
+            tmp_path=tmp_path,
+        )
+        assert errors(messages) == []
+
+        con = duckdb.connect(config={"allow_unsigned_extensions": "true", "extension_directory": erpl_extensions})
+        try:
+            for ext in ("erpl_rfc", "erpl_odp"):
+                con.load_extension(ext)
+            con.execute("SET erpl_telemetry_enabled = false")
+            con.execute(
+                "CREATE OR REPLACE SECRET t (TYPE sap_rfc, ASHOST $h, SYSNR $n, CLIENT $c, "
+                "USER $u, PASSWD $p, LANG $l)",
+                {
+                    "h": sap_rfc_config["ashost"],
+                    "n": sap_rfc_config["sysnr"],
+                    "c": sap_rfc_config["client"],
+                    "u": sap_rfc_config["user"],
+                    "p": sap_rfc_config["password"],
+                    "l": sap_rfc_config["lang"],
+                },
+            )
+            open_cursors = con.execute(
+                "SELECT count(*) FROM sap_odp_show_cursors() WHERE subscriber_proc = ? AND NOT is_closed",
+                [SUBSCRIBER_PROCESS],
+            ).fetchone()[0]
+        finally:
+            con.close()
+        assert open_cursors == 0, "the connector left a delta cursor reserved on SAP after the first run"
+
     def test_delta_records_carry_a_cdc_tombstone_column(self, config, tmp_path, odp_target, fresh_odp_subscription):
         context, name = odp_target
         stream_name = f"{context}/{name}"

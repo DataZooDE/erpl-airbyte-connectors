@@ -114,3 +114,55 @@ class TestSlicing:
         plans = d.read_plans(None, self._obj(), incremental=False, state={})
         ids = {p.slice_["session_id"] for p in plans}
         assert len(ids) == 2
+
+
+class TestSessionIdUniqueness:
+    """Each slice runs its own BICS session; colliding ids interleave results."""
+
+    def test_slices_of_a_long_stream_name_keep_distinct_sessions(self):
+        # BW technical names routinely run to 30 characters. Truncating after
+        # appending the member would give every slice the same session id, and
+        # the Concurrent CDK reads slices in parallel.
+        long_name = "ZQUERY_WITH_A_VERY_LONG_TECHNICAL_NAME_0001"
+        d = driver(
+            objects=[
+                {
+                    "name": long_name,
+                    "cube": "C",
+                    "slice_by": {"characteristic": "0CALMONTH", "members": ["202601", "202602", "202603"]},
+                }
+            ]
+        )
+        from source_sap.protocols.base import SapObject
+
+        obj = SapObject(name=long_name, json_schema={}, meta={"cube": "C", "query": None, "session_id": "x"})
+        ids = {p.slice_["session_id"] for p in d.read_plans(None, obj, incremental=False, state={})}
+        assert len(ids) == 3
+
+    def test_session_ids_stay_within_the_sap_field(self):
+        from source_sap.protocols.bics import session_id_for
+
+        got = session_id_for("Z" * 80, "202601")
+        assert len(got) <= 40
+
+    def test_session_ids_are_stable(self):
+        from source_sap.protocols.bics import session_id_for
+
+        assert session_id_for("Q", "a") == session_id_for("Q", "a")
+
+    def test_different_streams_do_not_collide(self):
+        from source_sap.protocols.bics import session_id_for
+
+        assert session_id_for("A" * 60, "") != session_id_for("B" * 60, "")
+
+
+class TestGrandTotalWithoutARowAxis:
+    def test_every_string_column_is_checked_when_no_row_axis_is_known(self):
+        # Otherwise a query with no `rows` configured emits the total as a fact.
+        assert is_grand_total_row({"0CALDAY": "Overall Result", "AMOUNT": 1.0})
+
+    def test_ordinary_rows_still_pass(self):
+        assert not is_grand_total_row({"0CALDAY": "20260101", "AMOUNT": 1.0})
+
+    def test_non_string_cells_are_ignored(self):
+        assert not is_grand_total_row({"0CALDAY": None, "AMOUNT": 1.0})

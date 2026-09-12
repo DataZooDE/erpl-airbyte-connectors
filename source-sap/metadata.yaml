@@ -16,11 +16,15 @@ data:
   # SAP ODP extractions can spend a long time preparing before the first packet.
   maxSecondsBetweenMessages: 7200
   allowedHosts:
+    # These are interpolated from the connection config, so they must name hosts.
+    # `base_url` is a full URL and `saprouter` is a /H/host/S/port route string,
+    # neither of which is a hostname -- the spec carries plain host fields
+    # alongside them for exactly this.
     hosts:
       - ${ashost}
       - ${mshost}
-      - ${base_url}
-      - ${saprouter}
+      - ${gateway_host}
+      - ${saprouter_host}
   registryOverrides:
     oss:
       enabled: true

@@ -71,6 +71,22 @@ connectionSpecification:
       type: string
       order: 9
       examples: ["https://sap.example.com:44300"]
+    gateway_host:
+      title: Gateway Host
+      description: >-
+        Hostname of the SAP Gateway, without scheme or port. Only needed so the
+        platform can allow egress to it; the connector itself uses the base URL.
+      type: string
+      order: 19
+      examples: ["sap.example.com"]
+    saprouter_host:
+      title: SAProuter Host
+      description: >-
+        Hostname of the SAProuter, without the /H/ /S/ route syntax. Only needed
+        so the platform can allow egress to it.
+      type: string
+      order: 26
+      examples: ["router.example.com"]
     saprouter:
       title: SAProuter String
       description: SAProuter connection string, if the SAP system is reached through one.

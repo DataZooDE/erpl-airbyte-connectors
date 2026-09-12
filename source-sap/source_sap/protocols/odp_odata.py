@@ -16,10 +16,11 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
+from urllib.parse import urlsplit
 
 from source_sap.duck import schema_from_description
 from source_sap.errors import config_error, traced
-from source_sap.protocols.base import ProtocolDriver, ReadPlan, SapObject
+from source_sap.protocols.base import ProtocolDriver, ReadPlan, SapObject, clamp
 from source_sap.session import ErplSession
 from source_sap.types import coerce_value
 
@@ -36,27 +37,44 @@ class OdpODataDriver(ProtocolDriver):
     # ---- discovery ------------------------------------------------------------
 
     def check(self, session: ErplSession) -> str:
+        """Probe a configured entity set if there is one, else the Gateway root.
+
+        Probing the entity set is what actually exercises the credentials and the
+        user's authorization for the service; the Gateway root answers 404 on a
+        stock system, which proves only that something is listening.
+        """
         base_url = self._base_url()
+        targets = [self._resolve_url(str(o.get("url") or k)) for k, o in self._object_overrides().items()]
+        probe = targets[0] if targets else base_url.rstrip("/") + "/sap/opu/odata/"
         try:
-            row = (
-                session.cursor()
-                .execute(
-                    "SELECT status FROM http_get(?, auth := ?, auth_type := 'BASIC')",
-                    [base_url.rstrip("/") + "/sap/opu/odata/", self._basic_auth()],
-                )
-                .fetchone()
-            )
+            # Auth comes from the URL-scoped http_basic secret, the same path the
+            # reads use. Passing the credential inline would put it one DuckDB
+            # error message away from the logs.
+            row = session.cursor().execute("SELECT status FROM http_get(?)", [probe]).fetchone()
         except Exception as exc:
             raise traced(f"Could not reach the SAP Gateway at {base_url}", exc) from exc
+
         status = int(row[0]) if row else 0
         if status in (401, 403):
             raise config_error(
-                f"The SAP Gateway at {base_url} rejected the credentials (HTTP {status}). "
-                "Check the user, password and that the user is authorised for /sap/opu/odata/."
+                f"The SAP Gateway rejected the credentials for {probe} (HTTP {status}). "
+                "Check the user and password, and that the user is authorised for this service."
+            )
+        if status == 404 and targets:
+            raise config_error(
+                f"The SAP Gateway has no service at {probe} (HTTP 404). Check the entity-set "
+                "URL, and that the OData service is activated in transaction /IWFND/MAINT_SERVICE."
             )
         if status >= 500:
-            raise config_error(f"The SAP Gateway at {base_url} returned HTTP {status}.")
-        return f"Reached the SAP Gateway at {base_url} (HTTP {status})."
+            raise config_error(f"The SAP Gateway at {base_url} returned HTTP {status} for {probe}.")
+        return f"Reached the SAP Gateway at {base_url} (HTTP {status} for {probe})."
+
+    def warn_about_insecure_transport(self) -> None:
+        if (self.config.get("base_url") or "").strip().lower().startswith("http://"):
+            logger.warning(
+                "The SAP Gateway base URL uses plain http, so the password and all extracted "
+                "data travel in the clear. Use https for anything other than a local test system."
+            )
 
     def _base_url(self) -> str:
         base_url = (self.config.get("base_url") or "").strip()
@@ -65,9 +83,6 @@ class OdpODataDriver(ProtocolDriver):
                 "ODP over OData needs the SAP Gateway base URL, for example 'https://sap.example.com:44300'."
             )
         return base_url
-
-    def _basic_auth(self) -> str:
-        return f"{self.config.get('user', '')}:{self.config.get('password', '')}"
 
     def discover(self, session: ErplSession) -> list[SapObject]:
         entries = self._selected_entity_sets(session)
@@ -105,15 +120,33 @@ class OdpODataDriver(ProtocolDriver):
         change_field = next((c for c in CHANGE_MODE_CANDIDATES if c in properties), None)
         return schema, change_field
 
+    def _resolve_url(self, url: str) -> str:
+        """Resolve an entity-set URL and confine it to the configured Gateway.
+
+        An absolute URL in the config would otherwise let the connector fetch any
+        host reachable from its network position, using credentials scoped to the
+        Gateway.
+        """
+        base_url = self._base_url()
+        text = str(url).strip()
+        if not text.lower().startswith(("http://", "https://")):
+            return base_url.rstrip("/") + "/" + text.lstrip("/")
+        base, target = urlsplit(base_url), urlsplit(text)
+        if (target.scheme, target.netloc) != (base.scheme, base.netloc):
+            raise config_error(
+                f"The entity-set URL {text!r} points at {target.scheme}://{target.netloc}, "
+                f"which is not the configured base_url ({base.scheme}://{base.netloc}). "
+                "Use a path relative to base_url, or change base_url."
+            )
+        return text
+
     def _selected_entity_sets(self, session: ErplSession) -> list[tuple[str, Mapping[str, Any]]]:
         overrides = self._object_overrides()
         entries: list[tuple[str, Mapping[str, Any]]] = []
         seen: set[str] = set()
 
         for key, override in overrides.items():
-            url = str(override.get("url") or key)
-            if not url.startswith("http"):
-                url = self._base_url().rstrip("/") + "/" + url.lstrip("/")
+            url = self._resolve_url(str(override.get("url") or key))
             if url not in seen:
                 seen.add(url)
                 entries.append((url, override))
@@ -168,9 +201,9 @@ class OdpODataDriver(ProtocolDriver):
         if not incremental:
             # A full refresh must not silently resume from a stored delta position.
             args.append("force_full_load := true")
-        max_page_size = self.options.get("max_page_size")
-        if max_page_size not in (None, ""):
-            args.append(f"max_page_size := {int(max_page_size)}")
+        max_page_size = clamp(self.options.get("max_page_size"), 1, 100_000)
+        if max_page_size is not None:
+            args.append(f"max_page_size := {max_page_size}")
         sql = f"SELECT * FROM odp_odata_read({', '.join(args)})"
         return [ReadPlan(sql=sql, params=[url], slice_={"entity_set": obj.meta["entity_set"]})]
 
@@ -210,10 +243,18 @@ class OdpODataDriver(ProtocolDriver):
         try:
             # Touch the listing function first so erpl_web creates its schema.
             cursor.execute("SELECT 1 FROM odp_odata_list_subscriptions() LIMIT 1").fetchall()
-            for sql, params in self.seed_subscription_statements(
-                str(obj.meta["entity_set_url"]), str(obj.meta["entity_set"]), str(token)
-            ):
-                cursor.execute(sql, list(params))
+            # DELETE then INSERT must not be interruptible: a crash between them
+            # would leave the stream with no stored position at all.
+            cursor.execute("BEGIN TRANSACTION")
+            try:
+                for sql, params in self.seed_subscription_statements(
+                    str(obj.meta["entity_set_url"]), str(obj.meta["entity_set"]), str(token)
+                ):
+                    cursor.execute(sql, list(params))
+                cursor.execute("COMMIT")
+            except Exception:
+                cursor.execute("ROLLBACK")
+                raise
         except Exception as exc:
             raise traced(
                 f"Could not restore the ODP delta position for {obj.name}. "

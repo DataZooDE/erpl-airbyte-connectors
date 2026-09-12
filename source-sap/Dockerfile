@@ -2,16 +2,16 @@
 FROM --platform=linux/amd64 docker.io/airbyte/python-connector-base:4.1.1@sha256:a268b44c733ae699a60f5fbc06a324945dba98945c6e2ab7f8609f2f895b0d28 AS extensions
 
 ARG DUCKDB_VERSION=v1.5.5
-ARG ERPL_REPO=http://get.erpl.io
+ARG ERPL_REPO=https://get.erpl.io
 ENV ERPL_EXTENSION_DIR=/airbyte/duckdb_extensions
 
 USER root
 RUN pip install --no-cache-dir "duckdb==1.5.5"
-COPY bin/fetch-extensions.sh /tmp/fetch-extensions.sh
+COPY bin/fetch-extensions.sh bin/checksums.txt /tmp/bin/
 # Downloads erpl + erpl_web, unpacks the trampoline's payload (erpl_rfc, erpl_bics,
 # erpl_odp and the SAP/ICU shared objects), then deletes the 180 MB trampoline.
 RUN DUCKDB_VERSION="${DUCKDB_VERSION}" ERPL_REPO="${ERPL_REPO}" \
-    bash /tmp/fetch-extensions.sh "${ERPL_EXTENSION_DIR}" && rm /tmp/fetch-extensions.sh
+    bash /tmp/bin/fetch-extensions.sh "${ERPL_EXTENSION_DIR}" && rm -rf /tmp/bin
 
 
 FROM --platform=linux/amd64 docker.io/airbyte/python-connector-base:4.1.1@sha256:a268b44c733ae699a60f5fbc06a324945dba98945c6e2ab7f8609f2f895b0d28
@@ -23,7 +23,7 @@ ENV ERPL_EXTENSION_DIR=/airbyte/duckdb_extensions \
     UV_LINK_MODE=copy \
     UV_PROJECT_ENVIRONMENT=/usr/local
 
-COPY --from=ghcr.io/astral-sh/uv:0.12.10 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.12.10@sha256:2bb3ebca0a796a155094a27773d290c4b074572e6107f171d88d086682fd2500 /uv /usr/local/bin/uv
 
 WORKDIR /airbyte/integration_code
 USER root

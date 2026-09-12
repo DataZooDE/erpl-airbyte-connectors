@@ -92,3 +92,42 @@ def _record(data):
     rec = MagicMock()
     rec.data = data
     return rec
+
+
+class TestFieldValueCursorOrdering:
+    """A high-water mark compares values; the comparison has to be right."""
+
+    def _cursor(self, initial=None):
+        repo, mgr = _plumbing()
+        return FieldValueCursor("S", None, repo, mgr, "C", initial or {}), repo
+
+    def test_numeric_values_compare_numerically(self):
+        # Lexicographic comparison would keep "9" over "10".
+        cursor, _ = self._cursor()
+        for value in [9, 10, 3]:
+            cursor.observe(_record({"C": value}))
+        assert cursor.state["C"] == 10
+
+    def test_numeric_strings_compare_numerically(self):
+        cursor, _ = self._cursor()
+        for value in ["9", "10"]:
+            cursor.observe(_record({"C": value}))
+        assert cursor.state["C"] == "10"
+
+    def test_dates_still_compare_correctly(self):
+        cursor, _ = self._cursor()
+        for value in ["2026-01-02", "2026-01-10", "2026-01-05"]:
+            cursor.observe(_record({"C": value}))
+        assert cursor.state["C"] == "2026-01-10"
+
+    def test_sap_dats_values_compare_correctly(self):
+        cursor, _ = self._cursor()
+        for value in ["20260102", "20260110"]:
+            cursor.observe(_record({"C": value}))
+        assert cursor.state["C"] == "20260110"
+
+    def test_mixed_types_do_not_crash(self):
+        cursor, _ = self._cursor()
+        cursor.observe(_record({"C": 5}))
+        cursor.observe(_record({"C": "abc"}))
+        assert cursor.state["C"] is not None

@@ -29,6 +29,18 @@ export ERPL_EXTENSION_DIR="$PWD/.erpl"
 export LD_LIBRARY_PATH="$ERPL_EXTENSION_DIR/v1.5.5/linux_amd64"
 ```
 
+## Supply chain
+
+The ERPL extensions are unsigned native code. `bin/fetch-extensions.sh` downloads
+them over HTTPS and verifies them against the checksums pinned in
+`bin/checksums.txt`, failing the build on a mismatch or an unpinned artifact.
+When moving to a new ERPL or DuckDB version:
+
+```bash
+ERPL_ALLOW_UNPINNED=1 ./bin/fetch-extensions.sh ./.erpl   # prints the digests
+# paste them into bin/checksums.txt
+```
+
 ## Tests
 
 ```bash

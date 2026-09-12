@@ -2,7 +2,7 @@
 
 import pytest
 
-from source_sap.protocols.base import quote_identifier
+from source_sap.protocols.base import sql_string_literal
 from source_sap.protocols.rfc import RfcDriver
 
 
@@ -19,12 +19,12 @@ def driver(**protocol):
     )
 
 
-class TestQuoting:
+class TestSqlStringLiteral:
     def test_single_quotes_are_escaped(self):
-        assert quote_identifier("O'BRIEN") == "'O''BRIEN'"
+        assert sql_string_literal("O'BRIEN") == "'O''BRIEN'"
 
     def test_injection_attempt_stays_inside_the_literal(self):
-        assert quote_identifier("X'); DROP TABLE Y; --") == "'X''); DROP TABLE Y; --'"
+        assert sql_string_literal("X'); DROP TABLE Y; --") == "'X''); DROP TABLE Y; --'"
 
 
 class TestReadPlans:

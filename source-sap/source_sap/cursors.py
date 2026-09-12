@@ -75,6 +75,19 @@ class FieldValueCursor(_BaseCursor):
     def state(self) -> dict[str, Any]:
         return {self._field: self._value} if self._value is not None else {}
 
+    @staticmethod
+    def _sort_key(value: Any) -> tuple[int, float, str]:
+        """Order numerics numerically and everything else lexicographically.
+
+        A plain string comparison keeps "9" over "10", which would silently skip
+        rows on a numeric cursor column. Dates and SAP DATS values sort correctly
+        either way, so only the numeric case needs the special handling.
+        """
+        try:
+            return (0, float(value), "")
+        except (TypeError, ValueError):
+            return (1, 0.0, str(value))
+
     def observe(self, record: Record) -> None:
         value = (record.data or {}).get(self._field)
         if value is None:
@@ -82,10 +95,19 @@ class FieldValueCursor(_BaseCursor):
         with self._lock:
             # Partitions are read out of order, so take the maximum rather than
             # the last value seen.
-            if self._value is None or str(value) > str(self._value):
+            if self._value is None or self._sort_key(value) > self._sort_key(self._value):
                 self._value = value
 
     def close_partition(self, partition: Partition) -> None:
+        """Checkpoint per partition.
+
+        Safe because the RFC driver emits exactly one plan per stream -- its
+        parallelism is pushed down into `sap_read_table(PARTITIONS := N)` rather
+        than fanned out across CDK partitions. If that ever changes, this has to
+        move to `ensure_at_least_one_state_emitted`, because a partial maximum
+        checkpointed while a sibling partition is still running would let the
+        next run's `>=` predicate skip the sibling's rows.
+        """
         self._emit(self.state)
 
     def ensure_at_least_one_state_emitted(self) -> None:

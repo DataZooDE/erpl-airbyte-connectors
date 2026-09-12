@@ -2,7 +2,7 @@
 
 from source_sap.protocols.base import SapObject
 from source_sap.protocols.odp_odata import OdpODataDriver
-from source_sap.protocols.odp_rfc import OdpRfcDriver, subscriber_process_for
+from source_sap.protocols.odp_rfc import OdpRfcDriver
 
 
 def rfc_driver(**protocol):
@@ -22,25 +22,6 @@ def odata_driver(**protocol):
     return OdpODataDriver(
         {"base_url": "http://sap:50000", "user": "u", "password": "p", "protocol": {"mode": "odp_odata", **protocol}}
     )
-
-
-class TestSubscriberProcess:
-    def test_is_deterministic(self):
-        a = subscriber_process_for("conn-1", "ABAP_CDS", "ZV$F")
-        assert a == subscriber_process_for("conn-1", "ABAP_CDS", "ZV$F")
-
-    def test_differs_per_object(self):
-        assert subscriber_process_for("c", "ABAP_CDS", "A$F") != subscriber_process_for("c", "ABAP_CDS", "B$F")
-
-    def test_fits_sap_field_width(self):
-        # RODPS subscriber process is CHAR(32).
-        got = subscriber_process_for("a-very-long-airbyte-connection-identifier", "ABAP_CDS", "SOME$LONG$NAME$F")
-        assert len(got) <= 32
-
-    def test_is_upper_case_and_alphanumeric(self):
-        got = subscriber_process_for("conn/1", "ABAP_CDS", "ZV$F")
-        assert got == got.upper()
-        assert all(c.isalnum() or c == "_" for c in got)
 
 
 class TestOdpRfcPlans:
@@ -145,3 +126,41 @@ class TestOdpODataStateSeeding:
         for sql, _ in statements:
             assert "D20260101_1" not in sql
         assert any("D20260101_1" in list(params) for _, params in statements)
+
+
+class TestOdpRfcCursorCleanup:
+    """`on_success` runs before `next_state`, so on the first run state is empty."""
+
+    def _obj(self):
+        return SapObject(
+            name="ABAP_CDS/ZV$F",
+            json_schema={},
+            supports_incremental=True,
+            meta={"context": "ABAP_CDS", "odp_name": "ZV$F", "subscriber_process": "AB_X"},
+        )
+
+    def _session(self):
+        from unittest.mock import MagicMock
+
+        session = MagicMock()
+        session.cursor.return_value.execute.return_value.fetchone.return_value = ("CLOSED",)
+        return session
+
+    def test_the_cursor_is_closed_on_the_first_run_with_empty_state(self):
+        # The first DELTAINIT would otherwise leave a delta cursor reserved on SAP.
+        session = self._session()
+        rfc_driver().on_success(session, self._obj(), {})
+        sql = session.cursor.return_value.execute.call_args[0][0]
+        assert "sap_odp_close_delta_cursor" in sql
+        assert "'AB_X'" in sql
+
+    def test_state_wins_over_the_derived_name(self):
+        session = self._session()
+        rfc_driver().on_success(session, self._obj(), {"subscriber_process": "AB_FROM_STATE"})
+        assert "'AB_FROM_STATE'" in session.cursor.return_value.execute.call_args[0][0]
+
+    def test_nothing_is_closed_when_there_is_no_subscriber_at_all(self):
+        session = self._session()
+        obj = SapObject(name="x", json_schema={}, meta={"context": "C", "odp_name": "N"})
+        rfc_driver().on_success(session, obj, {})
+        session.cursor.return_value.execute.assert_not_called()

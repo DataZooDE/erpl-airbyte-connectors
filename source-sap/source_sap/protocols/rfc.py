@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+import re
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from source_sap.errors import config_error, traced
-from source_sap.protocols.base import ProtocolDriver, ReadPlan, SapObject, quote_identifier
+from source_sap.protocols.base import (
+    ProtocolDriver,
+    ReadPlan,
+    SapObject,
+    clamp,
+    sql_string_literal,
+)
 from source_sap.retry import retry_transient
 from source_sap.session import ErplSession
 from source_sap.types import json_schema_for_fields, primary_key_for_fields
@@ -16,7 +23,10 @@ logger = logging.getLogger("airbyte")
 
 
 def _sql_literal(value: str) -> str:
-    return quote_identifier(str(value))
+    return sql_string_literal(str(value))
+
+
+CURSOR_FIELD_PATTERN = re.compile(r"^[A-Z0-9_/]{1,30}$")
 
 
 def sap_cursor_literal(value: Any, sap_type: str | None) -> str:
@@ -40,6 +50,26 @@ def sap_cursor_literal(value: Any, sap_type: str | None) -> str:
 class RfcDriver(ProtocolDriver):
     mode = "rfc"
     required_extensions = ("erpl_rfc",)
+
+    def validate_cursor_field(self, cursor_field: str, known_fields: Sequence[str]) -> str:
+        """The cursor field is interpolated bare into the ABAP WHERE fragment.
+
+        Every other fragment goes through `sql_string_literal`; an identifier
+        cannot, so it is checked against the shape SAP allows *and* against the
+        fields the table actually has.
+        """
+        candidate = str(cursor_field).strip().upper()
+        if not CURSOR_FIELD_PATTERN.match(candidate):
+            raise config_error(
+                f"cursor_field {cursor_field!r} is not a valid SAP field name. It must be "
+                "1-30 characters of A-Z, 0-9, underscore and slash."
+            )
+        if candidate not in {str(f).upper() for f in known_fields}:
+            raise config_error(
+                f"cursor_field {cursor_field!r} is not a field of this table. Available "
+                f"fields: {', '.join(sorted(str(f) for f in known_fields))}."
+            )
+        return candidate
 
     # ---- discovery ------------------------------------------------------------
 
@@ -80,6 +110,8 @@ class RfcDriver(ProtocolDriver):
             ]
             override = self._object_overrides().get(name, {})
             cursor_field = override.get("cursor_field")
+            if cursor_field:
+                cursor_field = self.validate_cursor_field(cursor_field, [f["technical_name"] for f in fields])
             cursor_sap_type = next((f["abap_type"] for f in fields if f["technical_name"] == cursor_field), None)
             objects.append(
                 SapObject(
@@ -155,15 +187,15 @@ class RfcDriver(ProtocolDriver):
             combined = " AND ".join(f"( {p} )" for p in predicates) if len(predicates) > 1 else predicates[0]
             args.append(f"FILTER := {_sql_literal(combined)}")
 
-        for cfg_key, sql_key in (
-            ("partitions", "PARTITIONS"),
-            ("fetch_size", "FETCH_SIZE"),
-            ("threads", "THREADS"),
-            ("max_rows", "MAX_ROWS"),
+        for cfg_key, sql_key, low, high in (
+            ("partitions", "PARTITIONS", 0, 64),
+            ("fetch_size", "FETCH_SIZE", 1, 4_000_000),
+            ("threads", "THREADS", 0, 32),
+            ("max_rows", "MAX_ROWS", 0, 2_147_483_647),
         ):
-            value = override.get(cfg_key, self.options.get(cfg_key))
-            if value not in (None, ""):
-                args.append(f"{sql_key} := {int(value)}")
+            value = clamp(override.get(cfg_key, self.options.get(cfg_key)), low, high)
+            if value is not None:
+                args.append(f"{sql_key} := {value}")
 
         sql = f"SELECT * FROM sap_read_table({', '.join(args)})"
         return [ReadPlan(sql=sql, slice_={"table": table})]

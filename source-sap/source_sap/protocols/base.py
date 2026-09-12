@@ -8,6 +8,7 @@ emission, state -- lives in the generic stream/cursor layer.
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -16,6 +17,8 @@ from typing import Any
 import duckdb
 
 from source_sap.session import ErplSession
+
+logger = logging.getLogger("airbyte")
 
 
 @dataclass(frozen=True)
@@ -74,6 +77,24 @@ class ProtocolDriver(ABC):
 
     # ---- optional hooks -------------------------------------------------------
 
+    def prepare(  # noqa: B027 - an optional hook, deliberately not abstract
+        self, session: ErplSession, obj: SapObject, state: Mapping[str, Any]
+    ) -> None:
+        """Restore any client-side position before partitions are generated."""
+
+    def warn_about_insecure_transport(self) -> None:
+        """Say so when credentials will travel in the clear.
+
+        SAP's own default is unencrypted RFC, which is fine against a local trial
+        system and wrong against anything else.
+        """
+        if str(self.config.get("snc_mode") or "0").strip() != "1":
+            logger.warning(
+                "SNC is not enabled, so this SAP RFC connection is unencrypted and the "
+                "password travels in the clear. Set snc_mode to '1' with an SNC library "
+                "and partner name for anything other than a local test system."
+            )
+
     def on_success(  # noqa: B027 - an optional hook, deliberately not abstract
         self, session: ErplSession, obj: SapObject, state: Mapping[str, Any]
     ) -> None:
@@ -99,12 +120,30 @@ class ProtocolDriver(ABC):
         return overrides
 
 
-def quote_identifier(value: str) -> str:
-    """Quote a SAP object name for use where DuckDB takes no bind parameter.
+def clamp(value: Any, low: int, high: int, default: int | None = None) -> int | None:
+    """Keep a tuning knob inside its documented range.
 
-    ERPL's table functions take their object name as a *constant* argument, so
-    a few call sites cannot use a bind parameter.  Everything that reaches this
-    function is validated against the discovery result first; this is the second
-    line of defence.
+    These reach SAP as thread and package counts; a hand-edited config should not
+    be able to ask for ten thousand parallel readers.
     """
-    return "'" + value.replace("'", "''") + "'"
+    if value is None or value == "":
+        return default
+    try:
+        return max(low, min(high, int(value)))
+    except (TypeError, ValueError):
+        return default
+
+
+def sql_string_literal(value: object) -> str:
+    """Render a value as a single-quoted SQL string literal.
+
+    ERPL's table functions take their object names, filters and column lists as
+    *constant* arguments, so those call sites cannot use a bind parameter. This
+    is the only thing standing between a config value and the SQL text, so it
+    escapes rather than validates -- callers that can validate against discovery
+    should do so as well, but nothing here assumes they have.
+
+    Note it produces a string *literal* (`'x'`), not a quoted identifier (`"x"`);
+    ERPL takes object names as literals.
+    """
+    return "'" + str(value).replace("'", "''") + "'"

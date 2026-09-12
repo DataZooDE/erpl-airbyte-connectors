@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from airbyte_cdk.models import (
@@ -45,6 +45,7 @@ DRIVERS: dict[str, type[ProtocolDriver]] = {
 }
 
 DEFAULT_WORKERS = 4
+MAX_WORKERS = 32  # matches the spec's maximum; each worker holds a SAP connection
 
 
 class SourceSap(ConcurrentSourceAdapter):
@@ -72,10 +73,16 @@ class SourceSap(ConcurrentSourceAdapter):
 
     @staticmethod
     def _num_workers(config: Mapping[str, Any]) -> int:
+        """Clamp to the spec's range; a hand-edited config should not be able to
+        exhaust the SAP system's work processes."""
+        value = config.get("concurrency")
+        if value is None or value == "":
+            return DEFAULT_WORKERS
         try:
-            return max(1, int(config.get("concurrency") or DEFAULT_WORKERS))
+            requested = int(value)
         except (TypeError, ValueError):
             return DEFAULT_WORKERS
+        return max(1, min(MAX_WORKERS, requested))
 
     @property
     def message_repository(self) -> MessageRepository:
@@ -150,8 +157,12 @@ class SourceSap(ConcurrentSourceAdapter):
         state_manager = ConnectorStateManager(state=self._state or [])
         configured = {s.stream.name: s for s in (self._catalog.streams if self._catalog else [])}
 
+        discovered = driver.discover(session)
+        if self._catalog is not None:
+            self._assert_all_configured_streams_found(configured, [o.name for o in discovered])
+
         streams: list[Stream] = []
-        for obj in driver.discover(session):
+        for obj in discovered:
             configured_stream = configured.get(obj.name)
             if self._catalog is not None and configured_stream is None:
                 continue
@@ -173,6 +184,23 @@ class SourceSap(ConcurrentSourceAdapter):
             )
             streams.append(StreamFacade(concurrent_stream, _LegacyStreamShim(obj), cursor, DebugSliceLogger(), logger))
         return streams
+
+    @staticmethod
+    def _assert_all_configured_streams_found(configured: Mapping[str, Any], discovered: Sequence[str]) -> None:
+        """A configured stream that no longer exists must fail, not sync empty.
+
+        Renaming a table or revoking an authorization would otherwise show up as
+        a successful sync that produced no records.
+        """
+        missing = sorted(set(configured) - set(discovered))
+        if not missing:
+            return
+        raise config_error(
+            f"Configured stream(s) no longer found in SAP: {', '.join(missing)}. "
+            "They may have been renamed, the selection pattern may have changed, or the "
+            "SAP user may have lost authorization. Refresh the schema, or fix the source "
+            "configuration."
+        )
 
     def _cursor(
         self,
@@ -199,9 +227,9 @@ class SourceSap(ConcurrentSourceAdapter):
         """BW appends a grand-total row to every BICS result; drop it."""
         if not isinstance(driver, BicsDriver):
             return None
+        # Applied even with no row axis configured: BW appends the total to every
+        # result, so leaving it in the stream is never right.
         row_axis = list(obj.meta.get("row_axis") or [])
-        if not row_axis:
-            return None
         return lambda record: is_grand_total_row(record, row_axis)
 
     # ---- plumbing ------------------------------------------------------------

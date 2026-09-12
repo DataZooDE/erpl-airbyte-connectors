@@ -19,7 +19,13 @@ from collections.abc import Mapping
 from typing import Any
 
 from source_sap.errors import config_error, traced
-from source_sap.protocols.base import ProtocolDriver, ReadPlan, SapObject, quote_identifier
+from source_sap.protocols.base import (
+    ProtocolDriver,
+    ReadPlan,
+    SapObject,
+    clamp,
+    sql_string_literal,
+)
 from source_sap.retry import retry_transient
 from source_sap.session import ErplSession
 from source_sap.types import json_schema_for_fields, primary_key_for_fields
@@ -35,20 +41,32 @@ ODP_CONTROL_FIELDS = ("ODQ_CHANGEMODE", "ODQ_ENTITYCNTR", "ODQ_TSN", "ODQ_UNITNO
 CHANGE_MODE_FIELD = "ODQ_CHANGEMODE"
 
 
-def subscriber_process_for(connection_id: str, context: str, odp_name: str) -> str:
+SUBSCRIBER_PROCESS_PATTERN = re.compile(r"^[A-Z0-9_]{1,32}$")
+
+
+def subscriber_process_for(config: Mapping[str, Any], context: str, odp_name: str) -> str:
     """A stable, SAP-safe subscriber-process name for one stream.
 
-    Deterministic so that a re-created connection resumes its existing ODQ
-    subscription instead of stranding it and starting a second one.
+    This is the ODQ subscription key on the SAP side, so it must be stable across
+    runs -- a fresh name every sync would strand the previous subscription, which
+    keeps retaining delta data -- and distinct between pipelines that read the
+    same object, or they consume each other's deltas.
+
+    The Airbyte protocol hands the connector no connection identifier, so the
+    name is derived from the logon that distinguishes one source from another
+    (system, client, user) plus the object. Two connections with *identical*
+    config still collide; `warn_if_subscriber_derived` says so, and setting
+    `subscriber_process` explicitly is the fix.
     """
-    digest = hashlib.sha1(f"{connection_id}|{context}|{odp_name}".encode()).hexdigest()[:10].upper()
+    identity = "|".join(str(config.get(key) or "") for key in ("ashost", "mshost", "sysnr", "sysid", "client", "user"))
+    digest = hashlib.sha1(f"{identity}|{context}|{odp_name}".encode()).hexdigest()[:10].upper()
     readable = re.sub(r"[^A-Za-z0-9]+", "_", odp_name).strip("_").upper()
     budget = _MAX_SUBSCRIBER_PROCESS - len(_PREFIX) - len(digest) - 1
     return f"{_PREFIX}{readable[:budget]}_{digest}"
 
 
 def _lit(value: str) -> str:
-    return quote_identifier(str(value))
+    return sql_string_literal(str(value))
 
 
 class OdpRfcDriver(ProtocolDriver):
@@ -69,6 +87,7 @@ class OdpRfcDriver(ProtocolDriver):
         return f"Connected to SAP ODP. Available contexts: {names}."
 
     def discover(self, session: ErplSession) -> list[SapObject]:
+        self.assert_no_subscriber_collisions()
         cursor = session.cursor()
         objects: list[SapObject] = []
         for context, odp_name, override in self._selected(session):
@@ -87,9 +106,8 @@ class OdpRfcDriver(ProtocolDriver):
                 logger.warning("Skipping ODP %s/%s: no fields reported.", context, odp_name)
                 continue
             business = [f for f in fields if f.get("technical_name") not in ODP_CONTROL_FIELDS]
-            subscriber = override.get("subscriber_process") or subscriber_process_for(
-                self._connection_id(), context, odp_name
-            )
+            subscriber = self._subscriber_for(context, odp_name, override)
+            self.warn_if_subscriber_derived(odp_name)
             objects.append(
                 SapObject(
                     name=f"{context}/{odp_name}",
@@ -107,8 +125,50 @@ class OdpRfcDriver(ProtocolDriver):
             )
         return objects
 
-    def _connection_id(self) -> str:
-        return str(self.config.get("connection_id") or self.options.get("connection_id") or "airbyte")
+    def _subscriber_for(self, context: str, odp_name: str, override: Mapping[str, Any]) -> str:
+        """The ODQ subscription key: explicit if configured, derived otherwise."""
+        explicit = override.get("subscriber_process")
+        if explicit is not None and str(explicit).strip() != "":
+            candidate = str(explicit).strip()
+            if not SUBSCRIBER_PROCESS_PATTERN.match(candidate):
+                raise config_error(
+                    f"subscriber_process {candidate!r} is not usable as a SAP ODQ subscriber "
+                    "process. It must be 1-32 characters of A-Z, 0-9 and underscore."
+                )
+            return candidate
+        return subscriber_process_for(self.config, context, odp_name)
+
+    def assert_no_subscriber_collisions(self) -> None:
+        """Two objects sharing one subscriber process share one ODQ subscription."""
+        by_name: dict[str, list[str]] = {}
+        for name, override in self._object_overrides().items():
+            context = str(override.get("context") or self.options.get("context") or "")
+            try:
+                subscriber = self._subscriber_for(context, name, override)
+            except Exception:
+                continue  # invalid values are reported by _subscriber_for itself
+            by_name.setdefault(subscriber, []).append(name)
+        clashes = {sub: names for sub, names in by_name.items() if len(names) > 1}
+        if clashes:
+            detail = "; ".join(f"{sub} is used by {', '.join(sorted(names))}" for sub, names in sorted(clashes.items()))
+            raise config_error(
+                f"Several ODP objects resolve to the same subscriber_process ({detail}). "
+                "They would share one SAP delta subscription and consume each other's "
+                "changes. Give each object its own subscriber_process."
+            )
+
+    def warn_if_subscriber_derived(self, odp_name: str) -> None:
+        """Say plainly that two identical connections would share a subscription."""
+        override = self._object_overrides().get(odp_name, {})
+        if str(override.get("subscriber_process") or "").strip():
+            return
+        logger.warning(
+            "No subscriber_process is set for ODP object %s, so one is derived from the SAP "
+            "logon and the object name. Two Airbyte connections with the same logon reading "
+            "this object will share a single SAP delta subscription and consume each other's "
+            "changes. Set subscriber_process explicitly on the object to keep them apart.",
+            odp_name,
+        )
 
     def _selected(self, session: ErplSession) -> list[tuple[str, str, Mapping[str, Any]]]:
         overrides = self._object_overrides()
@@ -176,9 +236,9 @@ class OdpRfcDriver(ProtocolDriver):
             return [ReadPlan(sql=sql, slice_={"odp": odp_name, "mode": "delta"})]
 
         args = [_lit(context), _lit(odp_name)]
-        threads = override.get("threads", self.options.get("threads"))
-        if threads not in (None, ""):
-            args.append(f"THREADS := {int(threads)}")
+        threads = clamp(override.get("threads", self.options.get("threads")), 1, 32)
+        if threads is not None:
+            args.append(f"THREADS := {threads}")
         self._append_projection(args, override)
         sql = f"SELECT * FROM sap_odp_read_full({', '.join(args)})"
         return [ReadPlan(sql=sql, slice_={"odp": odp_name, "mode": "full"})]
@@ -217,7 +277,10 @@ class OdpRfcDriver(ProtocolDriver):
 
     def on_success(self, session: ErplSession, obj: SapObject, state: Mapping[str, Any]) -> None:
         """Release the server-side delta cursor; the subscription itself survives."""
-        subscriber = state.get("subscriber_process")
+        # `on_success` runs before `next_state`, so on the first incremental run
+        # the state blob is still empty -- fall back to the derived name the read
+        # actually used, or the DELTAINIT leaves a cursor reserved on SAP.
+        subscriber = state.get("subscriber_process") or obj.meta.get("subscriber_process")
         if not subscriber:
             return
         context, odp_name = str(obj.meta["context"]), str(obj.meta["odp_name"])

@@ -60,6 +60,7 @@ jobs:
       ERPL_SAP_ODP_NAME: ${{ vars.SAP_ODP_NAME }}
       ERPL_SAP_ODP_ODATA_URL: ${{ vars.SAP_ODP_ODATA_URL }}
       ERPL_SAP_BICS_CUBE: ${{ vars.SAP_BICS_CUBE }}
+      ERPL_E2E_REQUIRED: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -70,4 +71,7 @@ jobs:
         run: |
           export ERPL_EXTENSION_DIR="$PWD/.erpl"
           export LD_LIBRARY_PATH="$PWD/.erpl/v1.5.5/linux_amd64"
+          # Fails the job if any protocol would silently skip for want of a
+          # variable, rather than reporting green on a suite that did not run.
+          export ERPL_E2E_REQUIRED=1
           uv run pytest e2e -q
