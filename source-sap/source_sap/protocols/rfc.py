@@ -31,6 +31,11 @@ CURSOR_FIELD_PATTERN = re.compile(r"^[A-Z0-9_/]{1,30}$")
 #: erpl's own default fetch budget, in bytes per round trip.
 DEFAULT_FETCH_SIZE = 1_310_720
 
+#: Below this many bytes per partition worker, a round trip carries so few rows
+#: that the trip count dominates. A 55-column DD02L row is ~12 KB, so this floor
+#: is about 40 rows per call.
+MIN_BUDGET_PER_WORKER = 512 * 1024
+
 #: Upper bound on the fetch budget. 4 MB was an arbitrary guess that turned out
 #: to cap below what measurement showed to be useful: 32x the default (~42 MB)
 #: gave the best throughput on a 55-column table. 64 MiB per round trip, times a
@@ -215,17 +220,34 @@ class RfcDriver(ProtocolDriver):
         # is bytes rather than rows, so on a wide table each worker is starved.
         # Measured on a 55-column, 164,673-row table: a serial scan gets ~107
         # rows per RFC round trip, eight partitions with the default budget get
-        # ~17, and the round-trip count goes up 6.3x. Scaling the budget with the
-        # worker count restores ~187 rows per call, so asking for partitions is
-        # taken as asking for the budget to keep up.
+        # ~17, and the round-trip count goes up 6.3x. Multiplying the budget by
+        # the worker count restores ~94 rows per call -- most of the serial
+        # figure -- so asking for partitions is taken as asking for the budget to
+        # keep up. (A 32x budget reached ~187, better still, but that is four
+        # times the memory per worker for the remaining 13%, and the end-to-end
+        # figure does not move with it.)
         #
         # This removes one penalty, not all of them: measured end to end, a
         # partitioned read is still slower through this connector than a serial
         # one even with the budget scaled, and why is not established. Hence
         # `partitions` defaults to 0. See docs/performance.md.
-        fetch_size = clamp(override.get("fetch_size", self.options.get("fetch_size")), 1, MAX_FETCH_SIZE)
+        configured = override.get("fetch_size", self.options.get("fetch_size"))
+        # A configured 0 means "I did not set this", not "one byte" -- which is
+        # what clamping it into the valid range would otherwise make of it.
+        fetch_size = clamp(configured, 1, MAX_FETCH_SIZE) if configured else None
         if fetch_size is None and partitions:
             fetch_size = min(DEFAULT_FETCH_SIZE * partitions, MAX_FETCH_SIZE)
+        elif fetch_size is not None and partitions and fetch_size // partitions < MIN_BUDGET_PER_WORKER:
+            logger.warning(
+                "%s: fetch_size %d split across %d partitions leaves %d bytes per "
+                "worker, below %d. Each RFC round trip will then carry very few "
+                "rows. Raise fetch_size, or lower partitions.",
+                obj.name,
+                fetch_size,
+                partitions,
+                fetch_size // partitions,
+                MIN_BUDGET_PER_WORKER,
+            )
         if fetch_size is not None:
             args.append(f"FETCH_SIZE := {fetch_size}")
 

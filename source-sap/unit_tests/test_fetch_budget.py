@@ -2,9 +2,13 @@
 
 Measured on a 55-column table: a serial scan gets ~107 rows per RFC round trip,
 eight partitions with the default budget get ~17, and the round-trip count goes
-up 6.3x. Raising fetch_size in step restores it -- ~187 rows per call and 2.3x
-faster than serial. Asking for partitions without also raising the budget is a
-footgun, so the connector scales it.
+up 6.3x. Multiplying the budget by the worker count restores ~94 rows per call,
+most of the serial figure. Asking for partitions without also raising the budget
+is a footgun, so the connector scales it.
+
+That is a round-trip count, from `bin/trace-round-trips.py`. It is not a claim
+about end-to-end throughput, which docs/performance.md reports as still slower
+than serial, for reasons this connector has not established.
 """
 
 from source_sap.protocols.base import SapObject
@@ -44,3 +48,26 @@ class TestBudgetScalesWithPartitions:
         target = SapObject(name="T", json_schema={}, meta={"table": "T"})
         sql = driver.read_plans(None, target, incremental=False, state={})[0].sql
         assert f"FETCH_SIZE := {DEFAULT_FETCH_SIZE * 4}" in sql
+
+
+class TestABudgetThatWouldStarveTheWorkers:
+    """`fetch_size: 0` used to clamp up to a one-byte budget, not to nothing."""
+
+    def test_a_zero_budget_means_unset_not_one_byte(self):
+        assert "FETCH_SIZE" not in sql_for(partitions=0, fetch_size=0)
+
+    def test_a_zero_budget_still_lets_partitioning_scale(self):
+        assert f"FETCH_SIZE := {DEFAULT_FETCH_SIZE * 4}" in sql_for(partitions=4, fetch_size=0)
+
+    def test_an_explicit_budget_too_small_to_divide_is_warned_about(self, caplog):
+        sql_for(partitions=8, fetch_size=4096)
+        assert "4096" in caplog.text and "8" in caplog.text
+
+    def test_a_generous_explicit_budget_is_not_warned_about(self, caplog):
+        sql_for(partitions=8, fetch_size=DEFAULT_FETCH_SIZE * 8)
+        assert caplog.text == ""
+
+    def test_a_small_budget_without_partitions_is_not_warned_about(self, caplog):
+        # Nothing is divided, so a small budget is just a small budget.
+        sql_for(partitions=0, fetch_size=4096)
+        assert caplog.text == ""

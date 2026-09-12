@@ -158,11 +158,21 @@ connectionSpecification:
                 empty, because erpl divides this budget across partition workers.
               type: integer
               order: 3
+            threads:
+              title: Threads
+              description: >-
+                RFC connections erpl opens for one table scan. Leave empty for erpl's
+                own default; it only has an effect alongside Partitions, which is off
+                by default.
+              type: integer
+              minimum: 0
+              maximum: 32
+              order: 4
             objects:
               title: Tables
               description: Per-table settings. Tables listed here are exposed even if no pattern matches them.
               type: array
-              order: 4
+              order: 5
               items:
                 type: object
                 required: [name]
@@ -192,6 +202,7 @@ connectionSpecification:
                     type: string
                   partitions: {type: integer}
                   fetch_size: {type: integer}
+                  threads: {type: integer}
                   max_rows: {type: integer}
         - title: SAP RFC Function Modules
           required: [mode, objects]

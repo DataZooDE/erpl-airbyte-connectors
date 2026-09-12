@@ -38,11 +38,12 @@ settings live in every mode.
 | `table_pattern` | SAP wildcard pattern selecting tables. Case-sensitive; `*` matches any sequence. |
 | `partitions` | Row ranges read in parallel. Default `0`; see [performance](performance.md). |
 | `fetch_size` | Bytes per SAP round trip. Scaled with `partitions` automatically when unset. |
+| `threads` | RFC connections opened for one table scan. Only has an effect alongside `partitions`. |
 | `objects[].name` | Table or CDS view name. |
 | `objects[].columns` | Columns to read. Pushed into SAP — the most effective setting here. |
 | `objects[].filter` | ABAP `WHERE` fragment evaluated by SAP, e.g. `CARRID = 'LH'`. |
 | `objects[].cursor_field` | Date or timestamp column for incremental sync. |
-| `objects[].partitions`, `fetch_size`, `max_rows` | Per-table overrides. |
+| `objects[].partitions`, `fetch_size`, `threads`, `max_rows` | Per-table overrides. |
 
 Full guide: [tables and CDS views](tables.md).
 
