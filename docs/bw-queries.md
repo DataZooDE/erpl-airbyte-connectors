@@ -56,6 +56,14 @@ has been given a value, and refuses the configuration otherwise — BW would
 return nothing and the reason would not be obvious. It does not police the
 reverse: a name the query does not expose is passed to BW, which ignores it.
 
+Two cases skip the check rather than fail it. A `variant` fills the variables on
+the BW side, and which ones it fills is not visible from here. And BW does not
+enumerate variables for every query — where the introspection call fails, the
+connector logs a warning naming the query and continues, because refusing there
+would break configurations that work. A BICS sync that returns no rows with such
+a warning in its log is an unbound mandatory variable until proven otherwise;
+`RSRT` shows the truth.
+
 ## The memory problem, and slicing
 
 **BW builds the entire result set or none of it.** There is no pagination in the

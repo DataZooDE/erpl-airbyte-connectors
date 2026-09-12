@@ -146,13 +146,28 @@ class BicsDriver(ProtocolDriver):
         query = override.get("query")
         if not query:
             return
+        if override.get("variant"):
+            # A variant fills the query's variables on the BW side. Which ones it
+            # fills is not visible from here, so nothing can be called missing.
+            return
         bound = {str(v.get("name", "")).upper() for v in (override.get("variables") or [])}
         try:
             rows = cursor.execute(
                 f"SELECT name, mandatory, input_enabled FROM sap_bics_variables({_lit(cube)}, query := {_lit(query)})"
             ).fetchall()
-        except Exception:
-            return  # variable introspection is a nicety, not a gate
+        except Exception as exc:
+            # Best-effort, not a gate: BW does not enumerate variables for every
+            # query, and refusing those would break configurations that work.
+            # Said aloud, because the alternative is a promise that silently
+            # did not apply -- and the symptom is a green sync returning nothing.
+            logger.warning(
+                "Could not check the mandatory BEx variables of %s (%s). If the sync "
+                "returns no rows, an unbound mandatory variable is the first thing to "
+                "check in RSRT.",
+                query,
+                str(exc).splitlines()[0] if str(exc) else exc,
+            )
+            return
         missing = [r[0] for r in rows if r[1] and r[2] and str(r[0]).upper() not in bound]
         if missing:
             raise config_error(

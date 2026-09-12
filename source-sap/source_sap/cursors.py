@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import decimal
 import logging
 import threading
 from collections.abc import Mapping
@@ -49,17 +50,27 @@ class _BaseCursor(Cursor):
         return True
 
     @staticmethod
-    def _sort_key(value: Any) -> tuple[int, float, str]:
+    def _sort_key(value: Any) -> tuple[int, decimal.Decimal, str]:
         """Order numerics numerically and everything else lexicographically.
 
         A plain string comparison keeps "9" over "10", which silently skips every
         key from 10 up. Dates and SAP DATS values sort correctly either way, so
         only the numeric case needs handling.
+
+        `Decimal`, not `float`: SAP NUMC and DEC values are decimal strings that
+        outrun a double's 53-bit mantissa, and two adjacent values would then
+        share a key -- a cursor that never advances past the boundary and a sync
+        that re-reads the same rows every run, silently.
         """
         try:
-            return (0, float(value), "")
-        except (TypeError, ValueError):
-            return (1, 0.0, str(value))
+            number = decimal.Decimal(str(value))
+        except (TypeError, ValueError, ArithmeticError):
+            return (1, decimal.Decimal(0), str(value))
+        if not number.is_finite():
+            # "NaN" and "Infinity" parse as Decimals and then compare by rules
+            # nobody wants in a high-water mark; as text they are just text.
+            return (1, decimal.Decimal(0), str(value))
+        return (0, number, "")
 
     def mark_failed(self) -> None:
         """Called when the stream did not finish. Cursors that persist a

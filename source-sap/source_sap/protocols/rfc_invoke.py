@@ -148,10 +148,15 @@ def describe_failure(return_table: Any) -> str:
     """The SAP messages from a failed call, as one line."""
     parts = []
     for message in _as_messages(return_table):
-        if str(message.get("TYPE") or "").strip().upper() not in FAILURE_TYPES:
+        # Through `_message_field`, like `is_bapi_failure`: the two must agree
+        # about what a message says, or a classified failure describes itself as
+        # nothing at all.
+        if str(_message_field(message, "TYPE") or "").strip().upper() not in FAILURE_TYPES:
             continue
-        text = str(message.get("MESSAGE") or "").strip()
-        ident = "/".join(str(message.get(key) or "") for key in ("ID", "NUMBER") if message.get(key))
+        text = str(_message_field(message, "MESSAGE") or "").strip()
+        ident = "/".join(
+            str(_message_field(message, key) or "") for key in ("ID", "NUMBER") if _message_field(message, key)
+        )
         parts.append(f"{text} ({ident})" if ident else text)
     return "; ".join(p for p in parts if p)
 

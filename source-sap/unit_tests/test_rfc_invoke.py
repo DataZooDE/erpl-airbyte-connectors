@@ -323,3 +323,40 @@ class TestParameterTyping:
     def test_a_hostile_value_still_cannot_escape(self):
         got = RfcInvokeDriver.render_parameters({"AIRLINE": "x'); DROP TABLE y; --"}, self.TYPES)
         assert got.count("'") % 2 == 0
+
+
+class TestALowercaseReturnTable:
+    """`is_bapi_failure` reads BAPIRET fields case-insensitively; the message
+    reader did not, so a driver that lowercases its column names produced
+    "F reported an error: " -- the SAP message, which is the entire point of
+    checking RETURN, dropped on the floor."""
+
+    def test_the_sap_message_survives(self):
+        from source_sap.protocols.rfc_invoke import describe_failure
+
+        described = describe_failure([{"type": "E", "message": "Booking is locked", "id": "BC", "number": "007"}])
+        assert "Booking is locked" in described
+
+    def test_the_message_identity_survives(self):
+        from source_sap.protocols.rfc_invoke import describe_failure
+
+        described = describe_failure([{"type": "E", "message": "broke", "id": "BC", "number": "007"}])
+        assert "BC/007" in described
+
+    def test_uppercase_still_works(self):
+        from source_sap.protocols.rfc_invoke import describe_failure
+
+        assert "broke" in describe_failure([{"TYPE": "E", "MESSAGE": "broke"}])
+
+    def test_a_success_row_is_not_described(self):
+        from source_sap.protocols.rfc_invoke import describe_failure
+
+        assert describe_failure([{"type": "S", "message": "fine"}]) == ""
+
+    def test_the_two_readers_agree(self):
+        from source_sap.protocols.rfc_invoke import describe_failure, is_bapi_failure
+
+        table = [{"type": "E", "message": "broke"}]
+        assert is_bapi_failure(table) and describe_failure(table), (
+            "a table classified as a failure must produce a description of it"
+        )
