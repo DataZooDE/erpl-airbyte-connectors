@@ -48,6 +48,19 @@ class _BaseCursor(Cursor):
     def should_be_synced(self, record: Record) -> bool:
         return True
 
+    @staticmethod
+    def _sort_key(value: Any) -> tuple[int, float, str]:
+        """Order numerics numerically and everything else lexicographically.
+
+        A plain string comparison keeps "9" over "10", which silently skips every
+        key from 10 up. Dates and SAP DATS values sort correctly either way, so
+        only the numeric case needs handling.
+        """
+        try:
+            return (0, float(value), "")
+        except (TypeError, ValueError):
+            return (1, 0.0, str(value))
+
     def _emit(self, state: Mapping[str, Any]) -> None:
         self._state_manager.update_state_for_stream(self._stream_name, self._namespace, dict(state))
         self._message_repository.emit_message(
@@ -70,23 +83,11 @@ class FieldValueCursor(_BaseCursor):
         super().__init__(stream_name, namespace, message_repository, state_manager)
         self._field = cursor_field
         self._value: Any = (initial_state or {}).get(cursor_field)
+        self._failed = False
 
     @property
     def state(self) -> dict[str, Any]:
         return {self._field: self._value} if self._value is not None else {}
-
-    @staticmethod
-    def _sort_key(value: Any) -> tuple[int, float, str]:
-        """Order numerics numerically and everything else lexicographically.
-
-        A plain string comparison keeps "9" over "10", which would silently skip
-        rows on a numeric cursor column. Dates and SAP DATS values sort correctly
-        either way, so only the numeric case needs the special handling.
-        """
-        try:
-            return (0, float(value), "")
-        except (TypeError, ValueError):
-            return (1, 0.0, str(value))
 
     def observe(self, record: Record) -> None:
         value = (record.data or {}).get(self._field)
@@ -99,18 +100,30 @@ class FieldValueCursor(_BaseCursor):
                 self._value = value
 
     def close_partition(self, partition: Partition) -> None:
-        """Checkpoint per partition.
+        """Deliberately no checkpoint.
 
-        Safe because the RFC driver emits exactly one plan per stream -- its
-        parallelism is pushed down into `sap_read_table(PARTITIONS := N)` rather
-        than fanned out across CDK partitions. If that ever changes, this has to
-        move to `ensure_at_least_one_state_emitted`, because a partial maximum
-        checkpointed while a sibling partition is still running would let the
-        next run's `>=` predicate skip the sibling's rows.
+        A stream can now be split across several plans -- `slice_by` on the
+        function-invoke and BICS drivers does exactly that -- and the slices are
+        read in parallel. Checkpointing the maximum seen so far while a slice
+        holding older rows is still running would let the next run's `>=`
+        predicate skip that slice's rows for good.
         """
-        self._emit(self.state)
+        return
+
+    def mark_failed(self) -> None:
+        """Suppress the checkpoint so a failed run is retried from where it was."""
+        with self._lock:
+            self._failed = True
 
     def ensure_at_least_one_state_emitted(self) -> None:
+        with self._lock:
+            if self._failed:
+                logger.warning(
+                    "Not checkpointing %s: the stream did not complete, so the next sync "
+                    "resumes from the previous cursor value.",
+                    self._stream_name,
+                )
+                return
         self._emit(self.state)
 
 
@@ -196,6 +209,7 @@ class ResumeKeyCursor(_BaseCursor):
         super().__init__(stream_name, namespace, message_repository, state_manager)
         self._field = key_field
         self._value: Any = (initial_state or {}).get(self.RESUME_FIELD)
+        self._failed = False
 
     @property
     def state(self) -> dict[str, Any]:
@@ -206,16 +220,41 @@ class ResumeKeyCursor(_BaseCursor):
         if value is None:
             return
         with self._lock:
-            if self._value is None or str(value) > str(self._value):
+            if self._value is None or self._sort_key(value) > self._sort_key(self._value):
                 self._value = value
 
-    def close_partition(self, partition: Partition) -> None:
-        # Mid-stream checkpoint: this is the resume point if the sync dies here.
+    def checkpoint(self) -> None:
+        """Write the resume point mid-read.
+
+        This is the whole feature: `close_partition` fires only after the entire
+        table has been read, because a resumable stream is single-partition by
+        construction, so waiting for it would mean the resume point only ever
+        exists after the sync no longer needs it.
+        """
+        with self._lock:
+            if self._value is None:
+                return
         self._emit(self.state)
 
+    def mark_failed(self) -> None:
+        """A crash must keep the resume point -- surviving it is the point."""
+        with self._lock:
+            self._failed = True
+
+    def close_partition(self, partition: Partition) -> None:
+        self.checkpoint()
+
     def ensure_at_least_one_state_emitted(self) -> None:
-        # The stream finished, so the next run starts from the top.
-        self._value = None
+        with self._lock:
+            if self._failed:
+                logger.info(
+                    "Keeping the resume point for %s at %r: the stream did not finish.",
+                    self._stream_name,
+                    self._value,
+                )
+                return
+            self._value = None
+        # A *finished* full refresh starts from the top next time.
         self._emit({self.RESUME_FIELD: None})
 
 

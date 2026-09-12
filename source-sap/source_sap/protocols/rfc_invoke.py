@@ -84,20 +84,66 @@ def _sap_timestamp(value: str) -> str:
     raise ValueError(f"{value!r} is not a timestamp")
 
 
-def is_bapi_failure(return_table: Sequence[Mapping[str, Any]] | None) -> bool:
-    """True when a BAPI `RETURN` table carries an error or abort message."""
-    for message in return_table or []:
-        kind = str((message or {}).get("TYPE") or "").strip().upper()
+#: Names SAP modules use for the BAPI return table. `RETURN` is the classic one,
+#: but function modules are free to prefix by direction and plenty do.
+RETURN_NAMES = ("RETURN", "E_RETURN", "ET_RETURN", "EX_RETURN", "T_RETURN", "RETURN_TAB")
+
+#: Fields that mark a row type as BAPIRET-shaped, used to warn about a module
+#: whose return table is named something else entirely.
+RETURN_SHAPE_FIELDS = frozenset({"TYPE", "MESSAGE", "ID", "NUMBER"})
+
+
+def _as_messages(return_table: Any) -> list[Mapping[str, Any]]:
+    """Normalise a RETURN parameter to a list of messages.
+
+    It usually arrives as a table, but a module declaring it as a single
+    structure yields a Mapping -- and iterating that yields its *keys*, so
+    `.get` on each would raise and a healthy call would fail as hard as a
+    broken one.
+    """
+    if return_table is None:
+        return []
+    if isinstance(return_table, Mapping):
+        return [return_table]
+    if isinstance(return_table, (list, tuple)):
+        return [m for m in return_table if isinstance(m, Mapping)]
+    return []
+
+
+def find_return_field(columns: Sequence[str], configured: str | None = None) -> str | None:
+    """Which result column holds the BAPI return table."""
+    if configured:
+        return configured if configured in columns else None
+    for name in RETURN_NAMES:
+        if name in columns:
+            return name
+    return None
+
+
+def _struct_field_names(duckdb_type: str) -> list[str]:
+    """Field names of a STRUCT type string, good enough to recognise BAPIRET."""
+    import re as _re
+
+    if not duckdb_type.upper().startswith("STRUCT("):
+        return []
+    inner = duckdb_type[duckdb_type.index("(") + 1 : duckdb_type.rindex(")")]
+    return [m.group(1).strip('"').upper() for m in _re.finditer(r'(?:^|,)\s*("?[\w]+"?)\s', inner)]
+
+
+def is_bapi_failure(return_table: Any) -> bool:
+    """True when a BAPI return table carries an error or abort message."""
+    for message in _as_messages(return_table):
+        kind = str(message.get("TYPE") or "").strip().upper()
         if kind in FAILURE_TYPES:
             return True
     return False
 
 
-def describe_failure(return_table: Sequence[Mapping[str, Any]]) -> str:
+def describe_failure(return_table: Any) -> str:
     """The SAP messages from a failed call, as one line."""
     parts = []
-    for message in return_table or []:
-        if str((message or {}).get("TYPE") or "").strip().upper() not in FAILURE_TYPES:
+    for message in _as_messages(return_table):
+        if str(message.get("TYPE") or "").strip().upper() not in FAILURE_TYPES:
             continue
         text = str(message.get("MESSAGE") or "").strip()
         ident = "/".join(str(message.get(key) or "") for key in ("ID", "NUMBER") if message.get(key))
@@ -136,7 +182,21 @@ class RfcInvokeDriver(ProtocolDriver):
                 )
             described = self._describe(cursor, function)
             parameters = dict(entry.get("parameters") or {})
-            self.validate_parameters(function, parameters, described)
+            slice_by = entry.get("slice_by") or {}
+            cursor_parameter = entry.get("cursor_parameter")
+            # F7: every name that ends up in the call must be validated, not just
+            # the static ones -- a typo in either would otherwise surface
+            # mid-sync as an opaque SAP dump after discovery said all was well.
+            self.validate_parameters(
+                function,
+                {
+                    **parameters,
+                    **({str(slice_by["parameter"]): None} if slice_by.get("parameter") else {}),
+                    **({str(cursor_parameter): None} if cursor_parameter else {}),
+                },
+                described,
+            )
+            parameters = self.canonical_parameters(parameters, described)
 
             path = str(entry.get("path") or "").strip()
             if path:
@@ -146,7 +206,6 @@ class RfcInvokeDriver(ProtocolDriver):
 
             schema = self.schema_for_duckdb_type(cursor, duckdb_type)
             cursor_field = entry.get("cursor_field")
-            cursor_parameter = entry.get("cursor_parameter")
             objects.append(
                 SapObject(
                     name=str(entry.get("name") or function),
@@ -160,7 +219,8 @@ class RfcInvokeDriver(ProtocolDriver):
                         "parameters": parameters,
                         "cursor_field": cursor_field,
                         "cursor_parameter": cursor_parameter,
-                        "slice_by": entry.get("slice_by") or {},
+                        "slice_by": slice_by,
+                        "return_field": self._return_field(function, described, entry),
                         "parameter_types": {
                             str(p["name"]): str(p.get("duckdb_type") or "")
                             for block in PARAMETER_BLOCKS
@@ -198,6 +258,56 @@ class RfcInvokeDriver(ProtocolDriver):
                 "that the module is flagged remote-enabled."
             )
         return {block: list(row[i] or []) for i, block in enumerate(PARAMETER_BLOCKS)}
+
+    def _return_field(self, function: str, described: Mapping[str, Any], entry: Mapping[str, Any]) -> str | None:
+        """Which result parameter to inspect for BAPI error messages.
+
+        Fails at discover when a module clearly has a return table under an
+        unrecognised name: a missed return table means a failed call is reported
+        as an empty stream, which is the one outcome this driver exists to avoid.
+        """
+        names = [str(p["name"]) for block in RESULT_BLOCKS for p in described.get(block, []) if p.get("name")]
+        configured = entry.get("return_parameter")
+        if configured:
+            if str(configured) not in names:
+                raise config_error(
+                    f"{function} has no result parameter {configured!r}. Available: "
+                    f"{', '.join(sorted(names)) or 'none'}."
+                )
+            return str(configured)
+
+        found = find_return_field(names)
+        if found:
+            return found
+
+        # No conventional name -- is there something return-shaped anyway?
+        for block in RESULT_BLOCKS:
+            for parameter in described.get(block, []):
+                declared = str(parameter.get("duckdb_type") or "").upper()
+                if len(RETURN_SHAPE_FIELDS & set(_struct_field_names(declared))) >= 3:
+                    raise config_error(
+                        f"{function} reports errors in {parameter['name']!r}, which this "
+                        "connector does not recognise as a return table. Set "
+                        "'return_parameter' on the object so BAPI errors are not silently "
+                        "read as an empty result."
+                    )
+        return None
+
+    def canonical_parameters(self, parameters: Mapping[str, Any], described: Mapping[str, Any]) -> dict[str, Any]:
+        """Re-spell parameter names the way SAP spells them.
+
+        Validation is case-insensitive, so `{"flightdate": ...}` passes; the type
+        lookup that follows is keyed on SAP's spelling, so it would then miss the
+        DATE cast and the call would fail at SAP with exactly the error the
+        casting layer exists to prevent.
+        """
+        by_upper = {
+            str(p["name"]).upper(): str(p["name"])
+            for block in PARAMETER_BLOCKS
+            for p in described.get(block, [])
+            if p.get("name")
+        }
+        return {by_upper.get(str(k).upper(), str(k)): v for k, v in parameters.items()}
 
     def validate_parameters(self, function: str, parameters: Mapping[str, Any], described: Mapping[str, Any]) -> None:
         """Reject unknown parameter names before SAP turns them into a dump."""
@@ -347,6 +457,7 @@ class RfcInvokeDriver(ProtocolDriver):
                 **slice_keys,
                 "function": function,
                 "path_field": obj.meta.get("path_field"),
+                "return_field": obj.meta.get("return_field"),
             },
         )
 
@@ -358,7 +469,8 @@ class RfcInvokeDriver(ProtocolDriver):
             return
         values = dict(zip(columns, row, strict=False))
 
-        return_table = values.get("RETURN")
+        return_field = plan.slice_.get("return_field") or find_return_field(columns)
+        return_table = values.get(return_field) if return_field else None
         if is_bapi_failure(return_table):
             function = plan.slice_.get("function", "the function module")
             raise config_error(f"{function} reported an error: {describe_failure(return_table)}")

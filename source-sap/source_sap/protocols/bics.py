@@ -218,10 +218,7 @@ class BicsDriver(ProtocolDriver):
         if cursor_variable and cursor_field:
             watermark = (state or {}).get(str(cursor_field)) or override.get("cursor_start")
             if watermark not in (None, ""):
-                variables.append(
-                    {"name": cursor_variable, "sign": "I", "op": "GE",
-                     "low": str(watermark), "high": ""}
-                )
+                variables.append({"name": cursor_variable, "sign": "I", "op": "GE", "low": str(watermark), "high": ""})
 
         if variables:
             rendered = []
@@ -317,9 +314,7 @@ class BicsDriver(ProtocolDriver):
                 change_mode_field=obj.change_mode_field,
                 meta={**obj.meta, "session_id": session_id_for(obj.name, str(member))},
             )
-            statements = self.session_statements(
-                sliced, extra_filter=(characteristic, [member]), state=state
-            )
+            statements = self.session_statements(sliced, extra_filter=(characteristic, [member]), state=state)
             plans.append(
                 ReadPlan(
                     sql=statements[-1],

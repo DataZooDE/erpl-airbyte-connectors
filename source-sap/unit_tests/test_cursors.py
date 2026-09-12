@@ -81,10 +81,20 @@ class TestFieldValueCursor:
         cursor.observe(_record({"FLDATE": None}))
         assert cursor.state["FLDATE"] == "20260101"
 
-    def test_emits_state_per_partition(self):
+    def test_closing_a_partition_emits_nothing(self):
+        """A stream can be split across several plans (slice_by), read in
+        parallel, so checkpointing a partial maximum would let the next run's
+        `>=` predicate skip a slower slice's rows."""
         cursor, repo = self._cursor()
         cursor.observe(_record({"FLDATE": "20260101"}))
         cursor.close_partition(MagicMock())
+        assert list(repo.consume_queue()) == []
+
+    def test_state_is_emitted_when_the_stream_completes(self):
+        cursor, repo = self._cursor()
+        cursor.observe(_record({"FLDATE": "20260101"}))
+        cursor.close_partition(MagicMock())
+        cursor.ensure_at_least_one_state_emitted()
         assert len(list(repo.consume_queue())) == 1
 
 

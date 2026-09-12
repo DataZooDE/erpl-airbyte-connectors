@@ -23,6 +23,12 @@ logger = logging.getLogger("airbyte")
 # How often a long-running scan reports progress, so the platform's
 # maxSecondsBetweenMessages budget is not hit during a slow SAP fetch.
 _HEARTBEAT_SECONDS = 60
+
+# How often a resumable stream writes its resume point. Waiting for the partition
+# to close would mean the point only ever exists once the sync has finished,
+# which is the one moment it is of no use.
+_CHECKPOINT_RECORDS = 50_000
+
 CDC_DELETED_AT = "_ab_cdc_deleted_at"
 
 
@@ -69,6 +75,10 @@ class ErplPartition(Partition):
                     self._apply_change_mode(data)
                 yield Record(data=data, stream_name=self._stream_name)
                 emitted += 1
+                if emitted % _CHECKPOINT_RECORDS == 0:
+                    checkpoint = getattr(self._cursor, "checkpoint", None)
+                    if checkpoint is not None:
+                        checkpoint()
                 now = time.monotonic()
                 if now - last_beat >= _HEARTBEAT_SECONDS:
                     # A LOG message is a protocol message, so this also keeps the

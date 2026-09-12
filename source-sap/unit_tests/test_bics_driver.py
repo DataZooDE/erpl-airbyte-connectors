@@ -177,16 +177,14 @@ class TestBicsIncremental:
     """
 
     def _obj(self, **meta):
-        return SapObject(name="Q", json_schema={},
-                         meta={"cube": "C", "query": "Q", "session_id": "s", **meta})
+        return SapObject(name="Q", json_schema={}, meta={"cube": "C", "query": "Q", "session_id": "s", **meta})
 
     def _driver(self, **obj):
         return driver(objects=[{"name": "Q", "cube": "C", **obj}])
 
     def test_a_cursor_variable_makes_the_stream_incremental(self):
         d = self._driver(cursor_variable="ZVAR_MONTH", cursor_field="0CALMONTH")
-        assert d.supports_incremental({"cursor_variable": "ZVAR_MONTH",
-                                       "cursor_field": "0CALMONTH"})
+        assert d.supports_incremental({"cursor_variable": "ZVAR_MONTH", "cursor_field": "0CALMONTH"})
 
     def test_a_cursor_field_alone_is_not_enough(self):
         # Without a variable there is nothing to restrict the query with, so the
@@ -213,23 +211,19 @@ class TestBicsIncremental:
         assert "'GE' AS OP" in stmts[0]
 
     def test_without_state_the_configured_start_is_used(self):
-        d = self._driver(cursor_variable="ZVAR_MONTH", cursor_field="0CALMONTH",
-                         cursor_start="202601")
-        stmts = d.session_statements(
-            self._obj(cursor_variable="ZVAR_MONTH", cursor_field="0CALMONTH"), state={}
-        )
+        d = self._driver(cursor_variable="ZVAR_MONTH", cursor_field="0CALMONTH", cursor_start="202601")
+        stmts = d.session_statements(self._obj(cursor_variable="ZVAR_MONTH", cursor_field="0CALMONTH"), state={})
         assert "'202601' AS LOW" in stmts[0]
 
     def test_without_state_or_a_start_the_variable_is_left_unset(self):
         d = self._driver(cursor_variable="ZVAR_MONTH", cursor_field="0CALMONTH")
-        stmts = d.session_statements(
-            self._obj(cursor_variable="ZVAR_MONTH", cursor_field="0CALMONTH"), state={}
-        )
+        stmts = d.session_statements(self._obj(cursor_variable="ZVAR_MONTH", cursor_field="0CALMONTH"), state={})
         assert "ZVAR_MONTH" not in stmts[0]
 
     def test_an_explicit_variable_binding_is_not_overwritten(self):
-        d = self._driver(cursor_variable="ZVAR_MONTH", cursor_field="0CALMONTH",
-                         variables=[{"name": "ZVAR_REGION", "low": "EU"}])
+        d = self._driver(
+            cursor_variable="ZVAR_MONTH", cursor_field="0CALMONTH", variables=[{"name": "ZVAR_REGION", "low": "EU"}]
+        )
         stmts = d.session_statements(
             self._obj(cursor_variable="ZVAR_MONTH", cursor_field="0CALMONTH"),
             state={"0CALMONTH": "202603"},

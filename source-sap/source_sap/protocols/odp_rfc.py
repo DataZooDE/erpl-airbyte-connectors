@@ -34,6 +34,9 @@ from source_sap.types import coerce_value, json_schema_for_fields, primary_key_f
 logger = logging.getLogger("airbyte")
 
 # RODPS_REPL subscriber process is CHAR(32).
+#: Sentinel distinguishing "no probe was taken this run" from "probed, unknown".
+_NOT_PROBED = object()
+
 _MAX_SUBSCRIBER_PROCESS = 32
 _PREFIX = "AB_"
 
@@ -79,6 +82,9 @@ class OdpRfcDriver(ProtocolDriver):
         # Streams whose delta read was skipped because SAP reported no change.
         # They opened no cursor, so there is nothing to close afterwards.
         self._skipped: set[str] = set()
+        #: Last-modified value the skip decision was made on, per stream, so
+        #: `next_state` records what the read started from rather than re-probing.
+        self._probed: dict[str, str | None] = {}
         self._skipped_lock = threading.Lock()
 
     # ---- discovery ------------------------------------------------------------
@@ -245,14 +251,26 @@ class OdpRfcDriver(ProtocolDriver):
             return None
         return str(coerce_value(row[1]))
 
+    def _remember_probe(self, stream: str, value: str | None) -> None:
+        with self._skipped_lock:
+            self._probed[stream] = value
+
     def _is_unchanged(self, session: ErplSession, obj: SapObject, state: Mapping[str, Any]) -> bool:
-        """True when SAP reports the object has not changed since the last run."""
+        """True when SAP reports the object has not changed since the last run.
+
+        The probed value is remembered for `next_state`, which must record the
+        timestamp the read *started* from. Probing again afterwards would stamp
+        changes that landed during the sync as already consumed, and the next run
+        would skip them.
+        """
         if self.options.get("skip_unchanged") is False:
             return False
+        current = self.last_modified(session, str(obj.meta["context"]), str(obj.meta["odp_name"]))
+        self._remember_probe(obj.name, current)
+
         previous = state.get("last_modified")
         if not (previous and state.get("initialized")):
             return False  # nothing to compare against, or no DELTAINIT yet
-        current = self.last_modified(session, str(obj.meta["context"]), str(obj.meta["odp_name"]))
         if current is None:
             return False
         return current == str(previous)
@@ -321,16 +339,26 @@ class OdpRfcDriver(ProtocolDriver):
         state["context"] = obj.meta["context"]
         state["odp_name"] = obj.meta["odp_name"]
         state["initialized"] = True
-        current = self.last_modified(session, str(obj.meta["context"]), str(obj.meta["odp_name"]))
-        if current is not None:
-            state["last_modified"] = current
+        with self._skipped_lock:
+            probed = self._probed.get(obj.name, _NOT_PROBED)
+        if probed is _NOT_PROBED:
+            # Full refresh never probes; take a reading now, before any later
+            # change can be mistaken for one this run consumed.
+            probed = self.last_modified(session, str(obj.meta["context"]), str(obj.meta["odp_name"]))
+        if probed is not None:
+            state["last_modified"] = probed
         return state
 
     def on_success(self, session: ErplSession, obj: SapObject, state: Mapping[str, Any]) -> None:
         """Release the server-side delta cursor; the subscription itself survives."""
         with self._skipped_lock:
-            if obj.name in self._skipped:
-                return  # nothing was opened, so there is nothing to close
+            # Read membership then clear it: a second read of the same stream in
+            # one process must not inherit a stale skip and leave a real cursor
+            # open on the SAP side.
+            was_skipped = obj.name in self._skipped
+            self._skipped.discard(obj.name)
+        if was_skipped:
+            return  # nothing was opened, so there is nothing to close
         # `on_success` runs before `next_state`, so on the first incremental run
         # the state blob is still empty -- fall back to the derived name the read
         # actually used, or the DELTAINIT leaves a cursor reserved on SAP.
