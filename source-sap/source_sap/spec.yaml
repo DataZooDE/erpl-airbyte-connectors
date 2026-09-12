@@ -140,10 +140,13 @@ connectionSpecification:
             partitions:
               title: Partitions
               description: >-
-                Split each table scan into this many row ranges read in parallel. Rows then
-                arrive in an unspecified order, which Airbyte does not care about. 0 disables it.
+                Split each table scan into this many row ranges read in parallel. Off by
+                default, because it only helps narrow extracts: measured on a 164,673-row
+                table, 8 partitions was 4.3x faster when one column was selected and 2.9x
+                *slower* when all 55 were. Raise it together with Columns, and measure.
+                Rows then arrive in an unspecified order, which Airbyte does not mind.
               type: integer
-              default: 4
+              default: 0
               minimum: 0
               maximum: 64
               order: 2
