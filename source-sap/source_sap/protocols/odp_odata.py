@@ -189,7 +189,16 @@ class OdpODataDriver(ProtocolDriver):
         finally:
             if connection is not None:
                 connection.close()
-        return [(row[0], {"entity_set": row[1]}) for row in rows]
+        # Through the same confinement configured URLs go through: the catalog
+        # is the Gateway's answer, and a compromised or impersonated Gateway
+        # must not be able to name a host the connector then fetches.
+        confined: list[tuple[str, Mapping[str, Any]]] = []
+        for row in rows:
+            try:
+                confined.append((self._resolve_url(str(row[0])), {"entity_set": row[1]}))
+            except Exception as exc:
+                logger.warning("Skipping catalog entity set %s: %s", row[1], exc)
+        return confined
 
     # ---- reading --------------------------------------------------------------
 

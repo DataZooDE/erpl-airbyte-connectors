@@ -469,7 +469,10 @@ class RfcInvokeDriver(ProtocolDriver):
         # that RETURN can be checked alongside the payload, from one invocation.
         return ReadPlan(
             sql=f"SELECT * FROM sap_rfc_invoke({', '.join(args)})",
-            slice_=dict(slice_keys),
+            # The function module names the partition even when nothing slices
+            # it: an unsliced plan with an empty identity logs as a partition
+            # nobody can tell from any other.
+            slice_={"function": function, **dict(slice_keys)},
             meta={
                 "function": function,
                 "path_field": obj.meta.get("path_field"),

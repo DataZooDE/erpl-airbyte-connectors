@@ -16,6 +16,7 @@ from source_sap.protocols.base import (
     sql_string_literal,
 )
 from source_sap.retry import retry_transient
+from source_sap.sap_values import sap_date, sap_time, sap_timestamp
 from source_sap.session import ErplSession
 from source_sap.types import json_schema_for_fields, primary_key_for_fields
 
@@ -55,15 +56,20 @@ def sap_cursor_literal(value: Any, sap_type: str | None) -> str:
     State travels as JSON, so a DATS column checkpoints as "2026-09-05" -- and
     SAP rejects that with *"'2026-09-05' is not a valid value for D(8,0)"*.
     Dates, times and timestamps have to go back to their compact DDIC form.
+
+    Raises `ValueError` for a value that is not of the column's DDIC type.
     """
     text = str(value)
     kind = (sap_type or "").strip().upper()
+    # Parse and reject rather than slice. Slicing turned a DATS state of
+    # "20260905120000" into "20260905" and sent SAP a selection the state never
+    # described, with nothing to show for it in the logs.
     if kind == "DATS":
-        return text.replace("-", "")[:8]
+        return sap_date(text).replace("-", "")
     if kind == "TIMS":
-        return text.replace(":", "")[:6]
+        return sap_time(text).replace(":", "")
     if kind in ("UTCLONG", "UTCL", "UTCS", "UTCM", "TIMESTAMP"):
-        return "".join(c for c in text if c.isdigit())[:14]
+        return "".join(c for c in sap_timestamp(text) if c.isdigit())
     return text
 
 
@@ -211,7 +217,13 @@ class RfcDriver(ProtocolDriver):
         if incremental and cursor_field:
             since = state.get(str(cursor_field))
             if since not in (None, ""):
-                literal = sap_cursor_literal(since, obj.meta.get("cursor_sap_type"))
+                try:
+                    literal = sap_cursor_literal(since, obj.meta.get("cursor_sap_type"))
+                except ValueError as exc:
+                    raise ValueError(
+                        f"The state value for {cursor_field} is not usable as a SAP "
+                        f"{obj.meta.get('cursor_sap_type')} value: {exc}. Reset the stream's state."
+                    ) from exc
                 if len(literal) > MAX_CURSOR_VALUE:
                     raise ValueError(
                         f"The state value for {cursor_field} is {len(literal)} characters, "

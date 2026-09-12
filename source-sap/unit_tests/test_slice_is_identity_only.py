@@ -20,6 +20,9 @@ CONN = {"ashost": "h", "sysnr": "00", "client": "001", "user": "u", "password": 
 #: back in: someone needs a handle at read time and reaches for the nearest dict.
 MACHINERY = {"setup", "session_id", "statements", "sql", "params", "cursor", "connection"}
 
+#: Every driver in DRIVERS, sliced where it slices. A test that says "walks
+#: every driver" and walks three of five is the shape it exists to reject --
+#: `test_every_driver_is_covered` keeps the two in step.
 CASES = {
     "rfc": ({"objects": [{"name": "T"}]}, SapObject(name="T", json_schema={}, meta={"table": "T"})),
     "bics": (
@@ -39,6 +42,34 @@ CASES = {
         },
         SapObject(name="Q", json_schema={}, meta={"cube": "C", "query": "Q", "session_id": "s"}),
     ),
+    "rfc_invoke": (
+        {"objects": [{"name": "F", "function": "BAPI_X"}]},
+        SapObject(name="F", json_schema={}, meta={"function": "BAPI_X"}),
+    ),
+    "rfc_invoke_sliced": (
+        {
+            "objects": [
+                {
+                    "name": "F",
+                    "function": "BAPI_X",
+                    "slice_by": {"parameter": "AIRLINE", "values": ["LH", "AA"]},
+                }
+            ]
+        },
+        SapObject(
+            name="F",
+            json_schema={},
+            meta={"function": "BAPI_X", "slice_by": {"parameter": "AIRLINE", "values": ["LH", "AA"]}},
+        ),
+    ),
+    "odp_rfc": (
+        {"context": "ABAP_CDS", "objects": [{"name": "P", "context": "ABAP_CDS"}]},
+        SapObject(
+            name="ABAP_CDS/P",
+            json_schema={},
+            meta={"context": "ABAP_CDS", "odp_name": "P", "subscriber_process": "AB_P"},
+        ),
+    ),
     "odp_odata": (
         {"objects": [{"entity_set": "E", "url": "http://gw/x"}]},
         SapObject(name="E", json_schema={}, meta={"entity_set": "E", "entity_set_url": "http://gw/x"}),
@@ -55,7 +86,7 @@ def _plans(mode, protocol, target):
 class TestPartitionIdentityIsReadable:
     def _plans(self, case):
         protocol, target = CASES[case]
-        return _plans(case.split("_sliced")[0], protocol, target)
+        return _plans(case.removesuffix("_sliced"), protocol, target)
 
     def test_no_machinery_key_reaches_the_slice(self, case):
         for plan in self._plans(case):
@@ -73,3 +104,9 @@ class TestPartitionIdentityIsReadable:
         identities = [tuple(sorted(p.slice_.items())) for p in plans]
         assert len(set(identities)) == len(plans), f"{case}: two partitions share one identity"
         assert all(p.slice_ for p in plans), f"{case}: a partition has no identity to log"
+
+
+def test_every_driver_is_covered():
+    """The registry is the authority on what "every driver" means."""
+    covered = {case.removesuffix("_sliced") for case in CASES}
+    assert covered == set(DRIVERS), f"drivers with no slice-identity case: {sorted(set(DRIVERS) - covered)}"
