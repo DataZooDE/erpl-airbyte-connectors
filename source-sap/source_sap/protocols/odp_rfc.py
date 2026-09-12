@@ -126,7 +126,11 @@ class OdpRfcDriver(ProtocolDriver):
                 SapObject(
                     name=f"{context}/{odp_name}",
                     json_schema=json_schema_for_fields(fields),
-                    primary_key=primary_key_for_fields(business),
+                    primary_key=(
+                        [[k] for k in override["primary_key"]]
+                        if override.get("primary_key")
+                        else primary_key_for_fields(business)
+                    ),
                     supports_incremental=supports_delta,
                     change_mode_field=CHANGE_MODE_FIELD if supports_delta else None,
                     meta={

@@ -127,7 +127,10 @@ class RfcDriver(ProtocolDriver):
             if cursor_field:
                 cursor_field = self.validate_cursor_field(cursor_field, [f["technical_name"] for f in fields])
             cursor_sap_type = next((f["abap_type"] for f in fields if f["technical_name"] == cursor_field), None)
-            primary_key = primary_key_for_fields(fields)
+            # SAP's own key is right most of the time, but a CDS view can
+            # report none, so a configured key wins.
+            configured_key = override.get("primary_key")
+            primary_key = [[k] for k in configured_key] if configured_key else primary_key_for_fields(fields)
             objects.append(
                 SapObject(
                     name=name,
