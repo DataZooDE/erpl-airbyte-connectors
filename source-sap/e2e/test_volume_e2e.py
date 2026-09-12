@@ -254,6 +254,10 @@ class TestPartitioningInvariants:
         )
 
 
+#: ODQ metadata that numbers one extraction's rows, not the rows themselves.
+SEQUENCE_COLUMNS = frozenset({"ODQ_TSN", "ODQ_RECORDNO", "ODQ_UNITNO", "ODQ_ENTITYCNTR"})
+
+
 class TestOdpVolume:
     """ODP at a size where more than one package is fetched."""
 
@@ -307,7 +311,16 @@ class TestOdpVolume:
         assert errors(serial) == [] and errors(parallel) == []
 
         def keyed(messages):
-            return sorted(tuple(sorted(r["data"].items())) for r in records(messages, self.stream))
+            # Without the ODQ sequence columns. ODQ_TSN is the transaction
+            # sequence number of the *extraction*, and ODQ_RECORDNO / ODQ_UNITNO
+            # / ODQ_ENTITYCNTR number the rows within it, so two extractions of
+            # identical data differ in all four by design. Comparing them
+            # compares the request, not the data. ODQ_CHANGEMODE is data -- it
+            # says what happened to the row -- and stays in.
+            return sorted(
+                tuple(sorted((k, v) for k, v in r["data"].items() if k not in SEQUENCE_COLUMNS))
+                for r in records(messages, self.stream)
+            )
 
         left, right = keyed(serial), keyed(parallel)
         assert len(left) >= self.MIN_ODP_ROWS
@@ -323,5 +336,11 @@ class TestOdpVolume:
             catalog=_catalog(self.stream, schema),
             tmp_path=tmp_path,
         )
-        rows = [tuple(sorted(r["data"].items())) for r in records(messages, self.stream)]
+        # On the business columns only: ODQ_RECORDNO and ODQ_UNITNO number the
+        # rows of one extraction, so a row delivered twice in two packages would
+        # carry two different numbers and this assertion could never fail.
+        rows = [
+            tuple(sorted((k, v) for k, v in r["data"].items() if k not in SEQUENCE_COLUMNS))
+            for r in records(messages, self.stream)
+        ]
         assert len(rows) == len(set(rows)), f"{len(rows) - len(set(rows)):,} duplicate rows across ODP packages"
