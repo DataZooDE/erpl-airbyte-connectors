@@ -1,77 +1,98 @@
 # Replication performance
 
-Hand-written interpretation of [`performance-raw.md`](./performance-raw.md),
-which `bin/benchmark.py` generates. Measurements are end to end: the connector
-runs as a subprocess, exactly as the Airbyte platform runs it, and RECORD
-messages are counted against wall-clock time. The figures therefore include the
-SAP round trips, DuckDB, the CDK's serialization and the write to stdout.
+Two tools produce the figures here, and every table below names which one:
 
-Everything below comes from that harness, on the same system, in the same run.
-Earlier versions of this document mixed in numbers from ad-hoc probes that used
-different queries; three separate conclusions were wrong as a result, so the
-rule now is that a figure appears here only if a benchmark case produces it.
+- **`bin/benchmark.py`** measures the connector end to end. It runs as a
+  subprocess, exactly as the Airbyte platform runs it, and counts RECORD
+  messages against wall-clock time — so the figures include the SAP round trips,
+  DuckDB, the CDK's serialization and the write to stdout. Its raw output is
+  [`performance-raw.md`](./performance-raw.md).
+- **`bin/trace-round-trips.py`** asks what the SAP side actually did, by counting
+  RFC calls in erpl's own trace rather than timing them.
+
+The provenance matters. Four successive conclusions in earlier versions of this
+document were wrong, every one because a probe query let DuckDB skip reading the
+columns and so was not measuring the connector's workload at all. Counting round
+trips is what finally produced an answer that held up.
 
 ## Project your columns
 
+*Source: `benchmark.py`, one run, same table and partition count on both rows.*
+
 | `DD02L`, 164,673 rows, serial | Records/s |
 |---|---:|
-| all 55 columns | 9,506 |
-| 2 of 55 columns | **36,630** |
+| all 55 columns | 9,422 |
+| 2 of 55 columns | **36,209** |
 
-**3.9x**, and the two cases differ in the projection alone — same table, same
-partition count, same run. This is the single most effective setting the
-connector exposes.
+**3.8x**, differing in the projection alone. This is the single most effective
+setting the connector exposes, and it costs nothing but naming the fields you
+want.
 
-## Partitioning does not help, and is off by default
+## Partitioning: one cause found and fixed, one still open
 
-| `DD02L`, all 55 columns | Records/s |
-|---:|---:|
-| 0 partitions (serial) | 9,450 |
-| 2 | 1,152 |
-| 4 | 776 |
-| 8 | 508 |
-| 16 | 516 |
+*Source: `benchmark.py`, one run per case.*
 
-And on a narrow extract, where the SAP side is fastest:
+| `DD02L`, all 55 columns | Before the budget fix | Now |
+|---:|---:|---:|
+| 0 partitions (serial) | 9,450 | **9,422** |
+| 2 | 1,152 | 1,484 |
+| 4 | 776 | 1,484 |
+| 8 | 508 | 1,491 |
+| 16 | 516 | — |
 
-| `DD02L`, 2 of 55 columns | Records/s |
-|---:|---:|
-| 0 partitions | 36,630 |
-| 8 partitions | 27,882 |
+### What was found
 
-Slower in both regimes, so `partitions` defaults to `0`. The setting remains for
-anyone whose system behaves differently, but raise it only with a measurement.
+*Source: `trace-round-trips.py`.*
 
-:::note
-The ERPL extension's own documentation reports a 2.7x speed-up from eight
-partitions, measured on a single-column extract. Both figures are right about
-different workloads.
+erpl's fetch budget is counted in **bytes**, not rows, and it is divided across
+partition workers. A wide row therefore starves each worker:
 
-**One cause is established.** erpl's fetch budget is counted in *bytes* and is
-divided across partition workers, so a wide row starves each one. Counting RFC
-round trips in erpl's trace, on the 55-column table:
-
-| | RFC calls | rows per call |
+| `DD02L`, all 55 columns | RFC calls | rows per call |
 |---|---:|---:|
 | serial, default budget | 1,540 | 107 |
 | 8 partitions, default budget | 9,680 | **17** |
 | 8 partitions, 8x budget | 1,760 | 94 |
 | 8 partitions, 32x budget | 880 | 187 |
 
-The connector now scales the budget with the partition count for this reason, so
-asking for partitions no longer silently starves the workers. Inside DuckDB that
-is worth roughly 2x over serial.
+Seventeen rows per round trip against 107, and 6.3x the round trips. **The
+connector now scales the fetch budget with the partition count**, so asking for
+partitions no longer silently starves the workers. An explicit `fetch_size`
+still wins.
 
-**A second cause is not established.** Even with the budget scaled, a partitioned
-read measured end to end through the connector is still slower than a serial one
-(111s against 19s on this table). Something about pulling a partitioned scan's
-rows into Python costs more than the extraction saves, and this document does not
-claim to know what. Four earlier attempts to explain it from timings were each
-measuring something other than what the connector does; the round-trip counts
-above are the first evidence here that survived scrutiny.
+That fix is visible in the table above: the penalty used to *grow* with the
+worker count (1,152 → 776 → 508) and is now flat at ~1,485 whatever the count.
+The flatness is the evidence that the starvation is gone — if it were still
+per-worker, more workers would still be worse.
+
+### What is still open
+
+A flat ~6x penalty against serial remains, independent of partition count, and
+this document does not claim to know its cause. Inside DuckDB the same scan with
+the same settings is roughly 2x *faster* than serial, so the cost appears when a
+partitioned scan's rows are pulled into Python — but that is where the evidence
+stops, and four earlier guesses in this space were wrong.
+
+`partitions` therefore defaults to **0**. The setting stays for anyone whose
+system behaves differently, but raise it only with a measurement.
+
+:::note
+The ERPL extension's own documentation reports a 2.7x speed-up from eight
+partitions. That is a single-column extract measured inside DuckDB, which is the
+regime where partitioning pays and where the byte budget is not a constraint.
+Both figures are right about different workloads.
 :::
 
+Partitioning does not pay on a narrow extract either, where the SAP side is
+fastest:
+
+| `DD02L`, 2 of 55 columns | Records/s |
+|---:|---:|
+| 0 partitions | 36,209 |
+| 8 partitions | 28,042 |
+
 ## Other protocols
+
+*Source: `benchmark.py`.*
 
 | Case | Records | Time | Records/s |
 |---|---:|---:|---:|
@@ -88,7 +109,7 @@ three rows as evidence the setting is harmless at this size, not as a curve.
 
 On the SAP side of the boundary, in this order:
 
-1. **Columns** — 3.9x, measured, costs nothing.
+1. **Columns** — 3.8x, measured, costs nothing.
 2. **SAP-side filters** — rows that never cross the wire cost nothing at all.
 3. **Protocol** — ODP delta moves only what changed.
 4. *Not* partitions, unless you have measured it on your own system.
@@ -98,11 +119,13 @@ On the SAP side of the boundary, in this order:
 ```bash
 ./bin/benchmark.py --list
 ./bin/benchmark.py --repeat 3          # writes docs/performance-raw.md
+./bin/trace-round-trips.py             # RFC call counts behind the above
 ```
 
-The harness refuses to run while anything else is talking to the same SAP
+`benchmark.py` refuses to run while anything else is talking to the same SAP
 system, pairs every figure for a case with the run it came from, and lists any
-case that failed rather than omitting it.
+case that failed rather than omitting it from a report that would then look
+complete.
 
 ## Environment
 
