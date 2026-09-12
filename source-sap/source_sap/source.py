@@ -34,7 +34,7 @@ from source_sap.protocols.odp_rfc import OdpRfcDriver
 from source_sap.protocols.rfc import RfcDriver
 from source_sap.protocols.rfc_invoke import RfcInvokeDriver
 from source_sap.session import ErplSession, SessionSettings
-from source_sap.streams import build_stream
+from source_sap.streams import build_stream, declare_cdc_column
 
 logger = logging.getLogger("airbyte")
 
@@ -279,7 +279,9 @@ class _LegacyStreamShim(Stream):
         return self._object.primary_key
 
     def get_json_schema(self) -> Mapping[str, Any]:
-        return dict(self._object.json_schema)
+        # Through `declare_cdc_column`, because this is the schema `discover`
+        # publishes and the records carry the tombstone.
+        return declare_cdc_column(self._object.json_schema, self._object)
 
     def read_records(self, *args: Any, **kwargs: Any):  # pragma: no cover - never called
         raise NotImplementedError("Records are read through the concurrent stream.")

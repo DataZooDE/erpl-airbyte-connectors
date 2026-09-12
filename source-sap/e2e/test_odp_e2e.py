@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from e2e.conftest import errors, records, run_connector, states
+from source_sap.streams import CDC_DELETED_AT
 
 pytestmark = pytest.mark.requires_creds
 
@@ -103,6 +104,9 @@ class TestOdpRfc:
         assert stream["source_defined_primary_key"]
         # The ODP control columns must be in the schema; they arrive in the data.
         assert "ODQ_CHANGEMODE" in stream["json_schema"]["properties"]
+        # And the tombstone the connector derives from them: a destination that
+        # never sees it in the catalog has no way to apply a delete.
+        assert CDC_DELETED_AT in stream["json_schema"]["properties"]
 
     def test_full_refresh_reads_the_snapshot(self, config, tmp_path, odp_target):
         context, name = odp_target
@@ -291,6 +295,10 @@ class TestOdpODataE2E:
         stream = _discover(config, tmp_path)
         assert "incremental" in stream["supported_sync_modes"]
         assert stream["json_schema"]["properties"]
+        assert CDC_DELETED_AT in stream["json_schema"]["properties"], (
+            "ODP over OData reports deletes the same way ODP over RFC does, so the "
+            "catalog has to declare the same tombstone column"
+        )
 
     def test_full_refresh_reads_the_entity_set(self, config, tmp_path):
         stream = _discover(config, tmp_path)
