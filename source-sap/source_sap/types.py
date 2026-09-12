@@ -109,6 +109,32 @@ def primary_key_for_fields(fields: Iterable[Mapping[str, Any]]) -> list[list[str
     return [[k] for k in keys] or None
 
 
+#: DDIC type of the SAP client column. It is part of almost every key, and
+#: constant within one connection, so it never distinguishes rows in a sync.
+CLIENT_TYPE = "CLNT"
+
+
+def resume_key_field(fields: Iterable[Mapping[str, Any]]) -> str | None:
+    """The single key field an interrupted full refresh can resume from.
+
+    Almost every SAP table is client-dependent, so `MANDT` sits in almost every
+    primary key. Counting it would make resumability apply to virtually nothing,
+    and it carries no information here: a connection names exactly one client, so
+    the value is the same for every row of the sync. What is left has to be a
+    single field, because a resume point is one `>` predicate.
+    """
+    key_fields = [
+        f
+        for f in fields
+        if (f.get("key") or f.get("is_key") in (True, "X"))
+        and str(f.get("abap_type") or f.get("sap_type") or "").strip().upper() != CLIENT_TYPE
+    ]
+    if len(key_fields) != 1:
+        return None
+    name = key_fields[0].get("technical_name") or key_fields[0].get("field")
+    return str(name) if name else None
+
+
 def coerce_value(value: Any) -> Any:
     """Return an orjson-serializable equivalent of a DuckDB value."""
     if value is None or isinstance(value, (str, int, float, bool)):

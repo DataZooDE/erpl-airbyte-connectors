@@ -29,7 +29,7 @@ WORKDIR /airbyte/integration_code
 USER root
 
 # Dependencies first, so a source-only change does not re-resolve them.
-COPY pyproject.toml uv.lock README.md ./
+COPY pyproject.toml uv.lock README.md LICENSE ./
 RUN uv sync --frozen --no-install-project --no-dev
 
 COPY source_sap ./source_sap

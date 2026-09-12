@@ -183,6 +183,69 @@ class TestOdpRfc:
             con.close()
         assert open_cursors == 0, "the connector left a delta cursor reserved on SAP after the first run"
 
+    def test_an_unchanged_source_is_skipped_without_opening_a_cursor(
+        self,
+        config,
+        tmp_path,
+        odp_target,
+        fresh_odp_subscription,
+        erpl_extensions,
+        sap_rfc_config,
+    ):
+        """A quiet stream should cost one probe, not a delta extraction.
+
+        `sap_odp_get_last_modified` answers without fetching rows; opening a
+        delta cursor to discover there is nothing to fetch costs a subscription
+        round trip and leaves a cursor to close.
+        """
+        import duckdb
+
+        context, name = odp_target
+        stream_name = f"{context}/{name}"
+        stream = _discover(config, tmp_path, stream_name)
+        catalog = _catalog(stream_name, stream["json_schema"], "incremental")
+
+        first = run_connector("read", config=config, catalog=catalog, tmp_path=tmp_path)
+        assert errors(first) == []
+        state = states(first, stream_name)[-1]
+        assert state["stream"]["stream_state"].get("last_modified"), (
+            "the first run must record the source's last-modified timestamp"
+        )
+
+        second = run_connector("read", config=config, catalog=catalog, state=[state], tmp_path=tmp_path)
+        assert errors(second) == []
+        assert records(second, stream_name) == []
+        assert any("skipping the delta read" in str(m.get("log", {}).get("message", "")) for m in second), (
+            "the second run should have skipped rather than extracted"
+        )
+        # The skipped run must still checkpoint, or the next sync looks like a reset.
+        assert states(second, stream_name)[-1]["stream"]["stream_state"]["subscriber_process"]
+
+        con = duckdb.connect(config={"allow_unsigned_extensions": "true", "extension_directory": erpl_extensions})
+        try:
+            for ext in ("erpl_rfc", "erpl_odp"):
+                con.load_extension(ext)
+            con.execute("SET erpl_telemetry_enabled = false")
+            con.execute(
+                "CREATE OR REPLACE SECRET t (TYPE sap_rfc, ASHOST $h, SYSNR $n, CLIENT $c, "
+                "USER $u, PASSWD $p, LANG $l)",
+                {
+                    "h": sap_rfc_config["ashost"],
+                    "n": sap_rfc_config["sysnr"],
+                    "c": sap_rfc_config["client"],
+                    "u": sap_rfc_config["user"],
+                    "p": sap_rfc_config["password"],
+                    "l": sap_rfc_config["lang"],
+                },
+            )
+            open_cursors = con.execute(
+                "SELECT count(*) FROM sap_odp_show_cursors() WHERE subscriber_proc = ? AND NOT is_closed",
+                [SUBSCRIBER_PROCESS],
+            ).fetchone()[0]
+        finally:
+            con.close()
+        assert open_cursors == 0
+
     def test_delta_records_carry_a_cdc_tombstone_column(self, config, tmp_path, odp_target, fresh_odp_subscription):
         context, name = odp_target
         stream_name = f"{context}/{name}"

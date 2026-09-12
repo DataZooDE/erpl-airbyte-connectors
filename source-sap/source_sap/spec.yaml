@@ -71,14 +71,6 @@ connectionSpecification:
       type: string
       order: 9
       examples: ["https://sap.example.com:44300"]
-    gateway_host:
-      title: Gateway Host
-      description: >-
-        Hostname of the SAP Gateway, without scheme or port. Only needed so the
-        platform can allow egress to it; the connector itself uses the base URL.
-      type: string
-      order: 19
-      examples: ["sap.example.com"]
     saprouter_host:
       title: SAProuter Host
       description: >-
@@ -190,6 +182,75 @@ connectionSpecification:
                   partitions: {type: integer}
                   fetch_size: {type: integer}
                   max_rows: {type: integer}
+        - title: SAP RFC Function Modules
+          required: [mode, objects]
+          properties:
+            mode:
+              type: string
+              const: rfc_invoke
+              default: rfc_invoke
+              order: 0
+            objects:
+              title: Function Modules
+              description: >-
+                The RFC function modules to call, one stream each. Only modules listed
+                here are ever called; there is no pattern discovery for this protocol,
+                because finding modules by pattern would mean calling them to see what
+                they do. Choose read-only modules: the connector cannot tell a BAPI that
+                reads from one that writes.
+              type: array
+              minItems: 1
+              order: 1
+              items:
+                type: object
+                required: [name, function]
+                properties:
+                  name:
+                    title: Stream Name
+                    type: string
+                  function:
+                    title: Function Module
+                    type: string
+                    examples: ["BAPI_FLIGHT_GETLIST"]
+                  path:
+                    title: Result Parameter
+                    description: >-
+                      Which result table becomes the stream's rows, for example
+                      "/FLIGHT_LIST". Leave empty to emit the module's scalar export
+                      parameters as a single record.
+                    type: string
+                    examples: ["/FLIGHT_LIST"]
+                  parameters:
+                    title: Parameters
+                    description: >-
+                      Values for the module's import and table parameters. Nested SAP
+                      structures and tables are written as JSON objects and arrays.
+                    type: object
+                  primary_key:
+                    title: Primary Key
+                    type: array
+                    items: {type: string}
+                  cursor_field:
+                    title: Cursor Field
+                    description: Result column whose highest value is tracked for incremental sync.
+                    type: string
+                  cursor_parameter:
+                    title: Cursor Parameter
+                    description: >-
+                      Import parameter the stored cursor value is passed to on the next
+                      run. Incremental sync needs both this and a cursor field.
+                    type: string
+                  slice_by:
+                    title: Slice By
+                    description: >-
+                      Call the module once per value of one parameter. The calls run in
+                      parallel and their results are unioned.
+                    type: object
+                    properties:
+                      parameter: {type: string}
+                      values:
+                        type: array
+                        items: {type: string}
         - title: SAP BW Queries (BICS)
           required: [mode]
           properties:

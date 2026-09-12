@@ -10,15 +10,20 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 import duckdb
 
+from source_sap.duck import columns_of
 from source_sap.session import ErplSession
+from source_sap.types import coerce_row
 
 logger = logging.getLogger("airbyte")
+
+#: Rows pulled from DuckDB per round trip.
+FETCH_BATCH = 10_000
 
 
 @dataclass(frozen=True)
@@ -77,6 +82,25 @@ class ProtocolDriver(ABC):
 
     # ---- optional hooks -------------------------------------------------------
 
+    def records_from(self, plan: ReadPlan, cursor: duckdb.DuckDBPyConnection) -> Iterator[dict[str, Any]]:
+        """Turn one read plan into records.
+
+        The default walks the result set in batches, which is what every
+        set-returning protocol wants. RFC function invocation overrides it: the
+        whole result of a call is a single row, and its `RETURN` table has to be
+        inspected before any record is emitted.
+        """
+        for statement in plan.slice_.get("setup", ()):  # BICS opens a session first
+            cursor.execute(statement)
+        result = plan.execute(cursor)
+        columns = columns_of(result.description)
+        while True:
+            rows = result.fetchmany(FETCH_BATCH)
+            if not rows:
+                return
+            for row in rows:
+                yield coerce_row(columns, row)
+
     def prepare(  # noqa: B027 - an optional hook, deliberately not abstract
         self, session: ErplSession, obj: SapObject, state: Mapping[str, Any]
     ) -> None:
@@ -103,6 +127,14 @@ class ProtocolDriver(ABC):
     def next_state(self, session: ErplSession, obj: SapObject, previous: Mapping[str, Any]) -> Mapping[str, Any]:
         """State to checkpoint after a successful incremental read."""
         return dict(previous)
+
+    def is_resumable(self, obj: SapObject) -> bool:
+        """Whether an interrupted full refresh of this stream can be resumed."""
+        return False
+
+    def resume_key_field(self, obj: SapObject) -> str | None:
+        """Record field holding the resume point, when the stream is resumable."""
+        return None
 
     def concurrency_group(self, obj: SapObject) -> str:
         """Non-empty to stop streams sharing a server-side resource running together."""
@@ -132,6 +164,28 @@ def clamp(value: Any, low: int, high: int, default: int | None = None) -> int | 
         return max(low, min(high, int(value)))
     except (TypeError, ValueError):
         return default
+
+
+def sql_struct_literal(value: Any) -> str:
+    """Render a Python value as a DuckDB literal.
+
+    RFC parameters are passed to `sap_rfc_invoke` as a STRUCT constant, and SAP
+    structures and table parameters nest arbitrarily, so this recurses. Every
+    leaf and every key goes through `sql_string_literal`, which is what keeps a
+    config value from escaping the literal it belongs to.
+    """
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return repr(value)
+    if isinstance(value, Mapping):
+        fields = ", ".join(f"{sql_string_literal(k)}: {sql_struct_literal(v)}" for k, v in value.items())
+        return "{" + fields + "}"
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(sql_struct_literal(v) for v in value) + "]"
+    return sql_string_literal(value)
 
 
 def sql_string_literal(value: object) -> str:

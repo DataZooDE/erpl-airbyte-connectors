@@ -171,6 +171,54 @@ class DriverStateCursor(_BaseCursor):
         self._emit(self._state)
 
 
+class ResumeKeyCursor(_BaseCursor):
+    """Resume point for a full refresh, tracked on the stream's primary key.
+
+    A full refresh of a six-figure table that dies halfway would otherwise start
+    over. An unpartitioned `sap_read_table` returns rows ordered by the primary
+    key, so the highest key emitted is a safe place to continue from.
+
+    The point is cleared when the stream completes: a *finished* full refresh
+    must start from the beginning next time, not from where it happened to end.
+    """
+
+    RESUME_FIELD = "__resume_key"
+
+    def __init__(
+        self,
+        stream_name: str,
+        namespace: str | None,
+        message_repository: MessageRepository,
+        state_manager: ConnectorStateManager,
+        key_field: str,
+        initial_state: Mapping[str, Any],
+    ) -> None:
+        super().__init__(stream_name, namespace, message_repository, state_manager)
+        self._field = key_field
+        self._value: Any = (initial_state or {}).get(self.RESUME_FIELD)
+
+    @property
+    def state(self) -> dict[str, Any]:
+        return {self.RESUME_FIELD: self._value} if self._value is not None else {}
+
+    def observe(self, record: Record) -> None:
+        value = (record.data or {}).get(self._field)
+        if value is None:
+            return
+        with self._lock:
+            if self._value is None or str(value) > str(self._value):
+                self._value = value
+
+    def close_partition(self, partition: Partition) -> None:
+        # Mid-stream checkpoint: this is the resume point if the sync dies here.
+        self._emit(self.state)
+
+    def ensure_at_least_one_state_emitted(self) -> None:
+        # The stream finished, so the next run starts from the top.
+        self._value = None
+        self._emit({self.RESUME_FIELD: None})
+
+
 class NoStateCursor(_BaseCursor):
     """Full-refresh streams still owe the platform one state message."""
 

@@ -33,6 +33,23 @@ def _exploding_session(message="boom"):
     return session
 
 
+def _driver():
+    """A real driver, so these tests exercise the default record production."""
+    from source_sap.protocols.rfc import RfcDriver
+
+    return RfcDriver(
+        {"ashost": "h", "sysnr": "00", "client": "001", "user": "u", "password": "p", "protocol": {"mode": "rfc"}}
+    )
+
+
+def _reading_session(rows=(("x",),)):
+    session = MagicMock()
+    result = session.cursor.return_value.execute.return_value
+    result.description = [("A", "VARCHAR")]
+    result.fetchmany.side_effect = [list(rows), []]
+    return session
+
+
 def test_a_read_failure_marks_the_cursor_failed():
     cursor, repo, driver = _cursor()
     partition = ErplPartition("S", _exploding_session(), ReadPlan(sql="SELECT 1"), None, cursor=cursor)
@@ -45,11 +62,7 @@ def test_a_read_failure_marks_the_cursor_failed():
 
 def test_a_successful_read_still_checkpoints():
     cursor, repo, driver = _cursor()
-    session = MagicMock()
-    result = session.cursor.return_value.execute.return_value
-    result.description = [("A", "VARCHAR")]
-    result.fetchmany.side_effect = [[("x",)], []]
-    partition = ErplPartition("S", session, ReadPlan(sql="SELECT 1"), None, cursor=cursor)
+    partition = ErplPartition("S", _reading_session(), ReadPlan(sql="SELECT 1"), None, cursor=cursor, driver=_driver())
     assert len(list(partition.read())) == 1
     cursor.ensure_at_least_one_state_emitted()
     assert len(list(repo.consume_queue())) == 1
@@ -58,14 +71,9 @@ def test_a_successful_read_still_checkpoints():
 
 def test_one_failed_partition_out_of_several_suppresses_the_checkpoint():
     cursor, repo, _ = _cursor()
-    good = MagicMock()
-    good_result = good.cursor.return_value.execute.return_value
-    good_result.description = [("A", "VARCHAR")]
-    good_result.fetchmany.side_effect = [[("x",)], []]
-
-    list(ErplPartition("S", good, ReadPlan(sql="a"), None, cursor=cursor).read())
+    list(ErplPartition("S", _reading_session(), ReadPlan(sql="a"), None, cursor=cursor, driver=_driver()).read())
     with pytest.raises(AirbyteTracedException):
-        list(ErplPartition("S", _exploding_session(), ReadPlan(sql="b"), None, cursor=cursor).read())
+        list(ErplPartition("S", _exploding_session(), ReadPlan(sql="b"), None, cursor=cursor, driver=_driver()).read())
 
     cursor.ensure_at_least_one_state_emitted()
     assert list(repo.consume_queue()) == []
@@ -86,11 +94,9 @@ def test_partitions_built_by_the_generator_carry_the_cursor():
     from source_sap.streams import build_stream
 
     cursor, repo, _ = _cursor()
-    driver = MagicMock()
-    driver.prepare = None
-    driver.read_plans.return_value = [ReadPlan(sql="SELECT 1")]
-    driver.concurrency_group.return_value = ""
-    obj = SapObject(name="S", json_schema={}, meta={})
+    # A real driver, so the test proves the wiring rather than a mock's obedience.
+    driver = _driver()
+    obj = SapObject(name="S", json_schema={}, meta={"table": "T"})
 
     stream = build_stream(_exploding_session(), driver, obj, cursor, incremental=True, state={})
     partitions = list(stream.generate_partitions())

@@ -17,7 +17,11 @@ from source_sap.protocols.base import (
 )
 from source_sap.retry import retry_transient
 from source_sap.session import ErplSession
-from source_sap.types import json_schema_for_fields, primary_key_for_fields
+from source_sap.types import (
+    json_schema_for_fields,
+    primary_key_for_fields,
+    resume_key_field,
+)
 
 logger = logging.getLogger("airbyte")
 
@@ -27,6 +31,9 @@ def _sql_literal(value: str) -> str:
 
 
 CURSOR_FIELD_PATTERN = re.compile(r"^[A-Z0-9_/]{1,30}$")
+
+#: State key holding where an interrupted full refresh should continue from.
+RESUME_FIELD = "__resume_key"
 
 
 def sap_cursor_literal(value: Any, sap_type: str | None) -> str:
@@ -50,6 +57,26 @@ def sap_cursor_literal(value: Any, sap_type: str | None) -> str:
 class RfcDriver(ProtocolDriver):
     mode = "rfc"
     required_extensions = ("erpl_rfc",)
+
+    def partitions_for(self, obj: SapObject) -> int:
+        """Effective partition count for a stream, object setting winning."""
+        override = self._object_overrides().get(obj.name, {})
+        return clamp(override.get("partitions", self.options.get("partitions")), 0, 64) or 0
+
+    def is_resumable(self, obj: SapObject, partitions: int | None = None) -> bool:
+        """Whether a full refresh of this stream can pick up where it left off.
+
+        Only an *unpartitioned* scan is ordered (ERPL asks SAP for a sorted read);
+        partitioned workers return their windows in whatever order they finish,
+        so a resume key would skip whatever a slower worker had not yet emitted.
+        """
+        if partitions is None:
+            partitions = self.partitions_for(obj)
+        return bool(obj.meta.get("resume_key")) and not partitions
+
+    def resume_key_field(self, obj: SapObject) -> str | None:
+        value = obj.meta.get("resume_key")
+        return str(value) if value else None
 
     def validate_cursor_field(self, cursor_field: str, known_fields: Sequence[str]) -> str:
         """The cursor field is interpolated bare into the ABAP WHERE fragment.
@@ -113,16 +140,18 @@ class RfcDriver(ProtocolDriver):
             if cursor_field:
                 cursor_field = self.validate_cursor_field(cursor_field, [f["technical_name"] for f in fields])
             cursor_sap_type = next((f["abap_type"] for f in fields if f["technical_name"] == cursor_field), None)
+            primary_key = primary_key_for_fields(fields)
             objects.append(
                 SapObject(
                     name=name,
                     json_schema=json_schema_for_fields(fields),
-                    primary_key=primary_key_for_fields(fields),
+                    primary_key=primary_key,
                     supports_incremental=bool(cursor_field),
                     meta={
                         "table": name,
                         "cursor_field": cursor_field,
                         "cursor_sap_type": cursor_sap_type,
+                        "resume_key": resume_key_field(fields),
                     },
                 )
             )
@@ -171,10 +200,22 @@ class RfcDriver(ProtocolDriver):
             rendered = ", ".join(_sql_literal(c) for c in columns)
             args.append(f"COLUMNS := [{rendered}]")
 
+        partitions = self.partitions_for(obj)
+
         predicates: list[str] = []
         user_filter = (override.get("filter") or "").strip()
         if user_filter:
             predicates.append(user_filter)
+
+        resume_from = state.get(RESUME_FIELD)
+        resume_field = obj.meta.get("resume_key")
+        if (
+            not incremental
+            and resume_from not in (None, "")
+            and resume_field
+            and not partitions  # a partitioned scan is unordered; see is_resumable
+        ):
+            predicates.append(f"{resume_field} > {_sql_literal(str(resume_from))}")
         cursor_field = obj.meta.get("cursor_field") or override.get("cursor_field")
         if incremental and cursor_field:
             since = state.get(str(cursor_field))

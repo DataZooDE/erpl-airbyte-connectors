@@ -1,0 +1,373 @@
+"""Calling SAP RFC function modules as Airbyte streams (`erpl_rfc`).
+
+Two constraints shape this driver.
+
+**`discover` never invokes anything.** Learning a stream's shape by calling the
+function module would mean a source connector calling, say, `BAPI_*_CREATE` just
+to see what comes back. It isn't acceptable, and it isn't necessary:
+`sap_rfc_describe_function` reports each parameter's DuckDB type as a string, and
+DuckDB will parse that string into columns for us. So there is also no pattern
+discovery here -- only function modules listed explicitly in the config are ever
+called.
+
+**BAPIs fail by returning, not by raising.** The classic BAPI contract puts
+errors in a `RETURN` table with `TYPE = 'E'` or `'A'` and answers `RFC_OK`. A
+connector that reads only the payload table turns such a failure into an empty
+stream. So the call is made *without* `path`, which yields one row holding every
+result parameter, and `RETURN` is inspected before a single record is emitted.
+"""
+
+from __future__ import annotations
+
+import datetime
+import logging
+from collections.abc import Iterator, Mapping, Sequence
+from typing import Any
+
+import duckdb
+
+from source_sap.duck import columns_of, schema_from_description
+from source_sap.errors import config_error, traced
+from source_sap.protocols.base import (
+    ProtocolDriver,
+    ReadPlan,
+    SapObject,
+    sql_string_literal,
+    sql_struct_literal,
+)
+from source_sap.retry import retry_transient
+from source_sap.session import ErplSession
+from source_sap.types import coerce_value
+
+logger = logging.getLogger("airbyte")
+
+#: BAPI RETURN message types that mean the call failed.
+FAILURE_TYPES = frozenset({"E", "A"})
+
+_INTEGER_TYPES = frozenset(
+    {"TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT", "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT"}
+)
+
+#: Result parameter blocks of a function module, in the order a `path` is resolved.
+RESULT_BLOCKS = ("tables", "export", "changing")
+PARAMETER_BLOCKS = ("import", "export", "changing", "tables")
+
+
+def _sap_date(value: str) -> str:
+    """Accept either SAP's compact DATS form or ISO, and emit ISO."""
+    text = value.strip()
+    for fmt in ("%Y%m%d", "%Y-%m-%d"):
+        try:
+            return datetime.datetime.strptime(text, fmt).date().isoformat()
+        except ValueError:
+            continue
+    raise ValueError(f"{value!r} is not a date (expected YYYYMMDD or YYYY-MM-DD)")
+
+
+def _sap_time(value: str) -> str:
+    text = value.strip()
+    for fmt in ("%H%M%S", "%H:%M:%S", "%H%M", "%H:%M"):
+        try:
+            return datetime.datetime.strptime(text, fmt).time().isoformat()
+        except ValueError:
+            continue
+    raise ValueError(f"{value!r} is not a time (expected HHMMSS or HH:MM:SS)")
+
+
+def _sap_timestamp(value: str) -> str:
+    text = value.strip()
+    for fmt in ("%Y%m%d%H%M%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.datetime.strptime(text, fmt).isoformat(sep=" ")
+        except ValueError:
+            continue
+    raise ValueError(f"{value!r} is not a timestamp")
+
+
+def is_bapi_failure(return_table: Sequence[Mapping[str, Any]] | None) -> bool:
+    """True when a BAPI `RETURN` table carries an error or abort message."""
+    for message in return_table or []:
+        kind = str((message or {}).get("TYPE") or "").strip().upper()
+        if kind in FAILURE_TYPES:
+            return True
+    return False
+
+
+def describe_failure(return_table: Sequence[Mapping[str, Any]]) -> str:
+    """The SAP messages from a failed call, as one line."""
+    parts = []
+    for message in return_table or []:
+        if str((message or {}).get("TYPE") or "").strip().upper() not in FAILURE_TYPES:
+            continue
+        text = str(message.get("MESSAGE") or "").strip()
+        ident = "/".join(str(message.get(key) or "") for key in ("ID", "NUMBER") if message.get(key))
+        parts.append(f"{text} ({ident})" if ident else text)
+    return "; ".join(p for p in parts if p)
+
+
+class RfcInvokeDriver(ProtocolDriver):
+    mode = "rfc_invoke"
+    required_extensions = ("erpl_rfc",)
+
+    # ---- lifecycle ------------------------------------------------------------
+
+    @retry_transient()
+    def check(self, session: ErplSession) -> str:
+        """Ping only. Calling the configured function modules would be a side effect."""
+        cursor = session.cursor()
+        try:
+            cursor.execute("PRAGMA sap_rfc_ping").fetchone()
+        except Exception as exc:
+            raise traced("SAP RFC connection test failed", exc) from exc
+        names = [str(o.get("function")) for o in self._objects() if o.get("function")]
+        for name in names:
+            self._describe(cursor, name)  # metadata only, no invocation
+        return f"Connected to SAP via RFC. Function modules resolved: {', '.join(names)}."
+
+    def discover(self, session: ErplSession) -> list[SapObject]:
+        cursor = session.cursor()
+        objects: list[SapObject] = []
+        for entry in self._objects():
+            function = str(entry.get("function") or "").strip()
+            if not function:
+                raise config_error(
+                    f"The RFC object {entry.get('name') or '<unnamed>'!r} has no 'function'. "
+                    "Name the RFC function module to call."
+                )
+            described = self._describe(cursor, function)
+            parameters = dict(entry.get("parameters") or {})
+            self.validate_parameters(function, parameters, described)
+
+            path = str(entry.get("path") or "").strip()
+            if path:
+                path_field, duckdb_type = self.resolve_path(function, path, described)
+            else:
+                path_field, duckdb_type = None, self._scalar_export_type(described)
+
+            schema = self.schema_for_duckdb_type(cursor, duckdb_type)
+            cursor_field = entry.get("cursor_field")
+            cursor_parameter = entry.get("cursor_parameter")
+            objects.append(
+                SapObject(
+                    name=str(entry.get("name") or function),
+                    json_schema=schema,
+                    primary_key=[[k] for k in (entry.get("primary_key") or [])] or None,
+                    supports_incremental=bool(cursor_field and cursor_parameter),
+                    meta={
+                        "function": function,
+                        "path": path,
+                        "path_field": path_field,
+                        "parameters": parameters,
+                        "cursor_field": cursor_field,
+                        "cursor_parameter": cursor_parameter,
+                        "slice_by": entry.get("slice_by") or {},
+                        "parameter_types": {
+                            str(p["name"]): str(p.get("duckdb_type") or "")
+                            for block in PARAMETER_BLOCKS
+                            for p in described.get(block, [])
+                            if p.get("name")
+                        },
+                    },
+                )
+            )
+        return objects
+
+    def _objects(self) -> list[Mapping[str, Any]]:
+        objects = list(self.options.get("objects") or [])
+        if not objects:
+            raise config_error(
+                "No RFC function modules configured. List them under 'objects'. There is "
+                "deliberately no pattern discovery for this protocol: finding function "
+                "modules by pattern would mean calling them to see what they do."
+            )
+        return objects
+
+    # ---- metadata -------------------------------------------------------------
+
+    def _describe(self, cursor: duckdb.DuckDBPyConnection, function: str) -> dict[str, list[Mapping[str, Any]]]:
+        try:
+            row = cursor.execute(
+                "SELECT import, export, changing, tables "
+                f"FROM sap_rfc_describe_function({sql_string_literal(function)})"
+            ).fetchone()
+        except Exception as exc:
+            raise traced(f"Could not read the interface of {function}", exc) from exc
+        if not row:
+            raise config_error(
+                f"SAP reports no RFC function module named {function!r}. Check the name and "
+                "that the module is flagged remote-enabled."
+            )
+        return {block: list(row[i] or []) for i, block in enumerate(PARAMETER_BLOCKS)}
+
+    def validate_parameters(self, function: str, parameters: Mapping[str, Any], described: Mapping[str, Any]) -> None:
+        """Reject unknown parameter names before SAP turns them into a dump."""
+        known = {
+            str(p.get("name")).upper() for block in PARAMETER_BLOCKS for p in described.get(block, []) if p.get("name")
+        }
+        unknown = [name for name in parameters if str(name).upper() not in known]
+        if unknown:
+            raise config_error(
+                f"{function} has no parameter(s) {', '.join(sorted(unknown))}. "
+                f"Available parameters: {', '.join(sorted(known))}."
+            )
+
+    def resolve_path(self, function: str, path: str, described: Mapping[str, Any]) -> tuple[str, str]:
+        """Map a `path` onto the result parameter it selects, and its DuckDB type."""
+        wanted = path.strip().lstrip("/").upper()
+        for block in RESULT_BLOCKS:
+            for parameter in described.get(block, []):
+                if str(parameter.get("name") or "").upper() == wanted:
+                    return str(parameter["name"]), str(parameter["duckdb_type"])
+        available = sorted(
+            str(p.get("name")) for block in RESULT_BLOCKS for p in described.get(block, []) if p.get("name")
+        )
+        raise config_error(
+            f"{function} has no result parameter {path!r}. Available result parameters: "
+            f"{', '.join(available) or 'none'}."
+        )
+
+    @staticmethod
+    def _scalar_export_type(described: Mapping[str, Any]) -> str:
+        """With no `path`, the stream is the function's scalar export parameters."""
+        fields = [
+            f"{p['name']} {p['duckdb_type']}"
+            for block in ("export", "changing")
+            for p in described.get(block, [])
+            if p.get("name") and not str(p.get("duckdb_type", "")).endswith("[]")
+        ]
+        if not fields:
+            raise config_error(
+                "This function module has no scalar export parameters, so there is nothing "
+                "to emit without a 'path'. Set 'path' to one of its result tables."
+            )
+        return "STRUCT(" + ", ".join(fields) + ")"
+
+    @staticmethod
+    def render_parameters(parameters: Mapping[str, Any], parameter_types: Mapping[str, str]) -> str:
+        """Render the parameter struct, casting each value to its declared type.
+
+        A connector config is JSON, so a date arrives as a string and SAP refuses
+        it outright: *"Parameter 'FLIGHTDATE' is of type 'RFCTYPE_DATE' (RFC) but
+        argument is of type 'VARCHAR' (DuckDB)"*. The type that
+        `sap_rfc_describe_function` reported is what tells us how to cast.
+
+        Only top-level parameters are cast; members of a SAP structure are left
+        as written, which is what ERPL's structure mapping expects.
+        """
+        rendered = []
+        for name, value in parameters.items():
+            declared = str(parameter_types.get(str(name), "")).strip().upper()
+            rendered.append(f"{sql_string_literal(name)}: {RfcInvokeDriver._render_value(name, value, declared)}")
+        return "{" + ", ".join(rendered) + "}"
+
+    @staticmethod
+    def _render_value(name: str, value: Any, declared: str) -> str:
+        if value is None or isinstance(value, (Mapping, list, tuple, bool)):
+            return sql_struct_literal(value)
+        try:
+            if declared == "DATE":
+                return f"DATE {sql_string_literal(_sap_date(str(value)))}"
+            if declared == "TIME":
+                return f"TIME {sql_string_literal(_sap_time(str(value)))}"
+            if declared.startswith("TIMESTAMP"):
+                return f"TIMESTAMP {sql_string_literal(_sap_timestamp(str(value)))}"
+            if declared.startswith("DECIMAL"):
+                return f"{sql_string_literal(str(value))}::{declared}"
+            if declared in _INTEGER_TYPES:
+                return f"{int(value)}::{declared}"
+            if declared in ("FLOAT", "DOUBLE", "REAL"):
+                return f"{float(value)}::{declared}"
+        except (ValueError, TypeError) as exc:
+            raise config_error(
+                f"The value for RFC parameter {name!r} does not fit its SAP type {declared}: {exc}"
+            ) from exc
+        return sql_struct_literal(value)
+
+    @staticmethod
+    def schema_for_duckdb_type(cursor: duckdb.DuckDBPyConnection, duckdb_type: str) -> dict[str, Any]:
+        """Expand a DuckDB STRUCT type string into a JSON Schema.
+
+        This is what lets `discover` work off metadata: DuckDB parses the type
+        string that `sap_rfc_describe_function` reported, and the resulting
+        column descriptions go through the same path as every other protocol.
+        """
+        element = duckdb_type.strip()
+        if element.endswith("[]"):
+            element = element[:-2]
+        try:
+            result = cursor.execute(f"SELECT s.* FROM (SELECT NULL::{element} AS s) WHERE false")
+            schema = schema_from_description(result.description)
+        except Exception as exc:
+            raise config_error(
+                f"Could not interpret the SAP parameter type {duckdb_type!r} reported by the function module: {exc}"
+            ) from exc
+        if not schema["properties"]:
+            raise config_error(f"The SAP parameter type {duckdb_type!r} has no fields, so it cannot become a stream.")
+        return schema
+
+    # ---- reading --------------------------------------------------------------
+
+    def read_plans(
+        self, session: ErplSession, obj: SapObject, *, incremental: bool, state: Mapping[str, Any]
+    ) -> list[ReadPlan]:
+        function = str(obj.meta["function"])
+        base_parameters = dict(obj.meta.get("parameters") or {})
+
+        if incremental:
+            cursor_field = obj.meta.get("cursor_field")
+            cursor_parameter = obj.meta.get("cursor_parameter")
+            since = state.get(str(cursor_field)) if cursor_field else None
+            if cursor_parameter and since not in (None, ""):
+                base_parameters[str(cursor_parameter)] = since
+
+        slice_by = obj.meta.get("slice_by") or {}
+        parameter, values = slice_by.get("parameter"), list(slice_by.get("values") or [])
+        if not (parameter and values):
+            return [self._plan(function, base_parameters, obj, {})]
+        return [
+            self._plan(function, {**base_parameters, str(parameter): value}, obj, {str(parameter): value})
+            for value in values
+        ]
+
+    def _plan(
+        self,
+        function: str,
+        parameters: Mapping[str, Any],
+        obj: SapObject,
+        slice_keys: Mapping[str, Any],
+    ) -> ReadPlan:
+        args = [sql_string_literal(function)]
+        if parameters:
+            args.append(self.render_parameters(dict(parameters), obj.meta.get("parameter_types") or {}))
+        # Deliberately no `path`: the call has to return every result parameter so
+        # that RETURN can be checked alongside the payload, from one invocation.
+        return ReadPlan(
+            sql=f"SELECT * FROM sap_rfc_invoke({', '.join(args)})",
+            slice_={
+                **slice_keys,
+                "function": function,
+                "path_field": obj.meta.get("path_field"),
+            },
+        )
+
+    def records_from(self, plan: ReadPlan, cursor: duckdb.DuckDBPyConnection) -> Iterator[dict[str, Any]]:
+        result = plan.execute(cursor)
+        columns = columns_of(result.description)
+        row = result.fetchone()
+        if row is None:
+            return
+        values = dict(zip(columns, row, strict=False))
+
+        return_table = values.get("RETURN")
+        if is_bapi_failure(return_table):
+            function = plan.slice_.get("function", "the function module")
+            raise config_error(f"{function} reported an error: {describe_failure(return_table)}")
+
+        path_field = plan.slice_.get("path_field")
+        if not path_field:
+            # No path: the scalar export parameters are the single record.
+            yield {key: coerce_value(value) for key, value in values.items() if not isinstance(value, list)}
+            return
+
+        for entry in values.get(path_field) or []:
+            yield {key: coerce_value(value) for key, value in (entry or {}).items()}

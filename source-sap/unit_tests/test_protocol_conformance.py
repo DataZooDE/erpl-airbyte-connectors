@@ -38,10 +38,13 @@ class TestSpec:
         props = SourceSap().spec(logging.getLogger("airbyte")).connectionSpecification["properties"]
         assert props["password"].get("airbyte_secret") is True
 
-    def test_the_protocol_choice_offers_all_four_modes(self):
+    def test_the_protocol_choice_offers_every_mode_the_source_implements(self):
+        from source_sap.source import DRIVERS
+
         props = SourceSap().spec(logging.getLogger("airbyte")).connectionSpecification["properties"]
         modes = {option["properties"]["mode"]["const"] for option in props["protocol"]["oneOf"]}
-        assert modes == {"rfc", "bics", "odp_rfc", "odp_odata"}
+        # The spec and the driver registry must not drift apart.
+        assert modes == set(DRIVERS)
 
 
 def _stream(supports_incremental, primary_key=None):

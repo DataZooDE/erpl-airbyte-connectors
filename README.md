@@ -52,6 +52,8 @@ it writes to stdout. The reference system is the
 
 ## Licence
 
-This repository is MIT licensed (see [LICENSE](./LICENSE)). The ERPL extensions it
-loads are a separate product of DataZoo GmbH, licensed under BSL 1.1; BICS and ODP
-replication are Enterprise Edition features. See [erpl.io](https://erpl.io).
+Business Source License 1.1 (see [LICENSE](./LICENSE)), the same licence as the
+ERPL extensions this connector loads. You may use it in production, but not offer
+it to third parties on a hosted or embedded basis; the licence converts to MPL 2.0
+five years after publication. BICS and ODP replication are ERPL Enterprise Edition
+features. For commercial terms, see [erpl.io](https://erpl.io).

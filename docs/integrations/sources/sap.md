@@ -9,6 +9,7 @@ extensions. One connector covers four SAP interfaces; you pick one per connectio
 | SAP BW Queries (BICS) | BW InfoProviders and BEx queries, including variable binding |
 | SAP ODP (RFC) | ODP providers in the BW, ABAP_CDS, SAPI, SLT and HANA contexts, full and delta |
 | SAP ODP (OData) | The same ODP data over the SAP Gateway, full and delta |
+| SAP RFC Function Modules | Any remote-enabled function module or BAPI, called with your parameters |
 
 ## Prerequisites
 
@@ -19,10 +20,10 @@ extensions. One connector covers four SAP interfaces; you pick one per connectio
   `RFC_READ_TABLE` and `DDIF_FIELDINFO_GET` for the RFC protocol, `RODPS_REPL_*`
   for ODP, and the BICS function group for BW.
 - For **SAP ODP (OData)**: the **Gateway Base URL** (for example
-  `https://sap.example.com:44300`) and an activated ODP OData service. Also set
-  **Gateway Host** (the bare hostname) so the platform can allow egress to it.
+  `https://sap.example.com:44300`) and an activated ODP OData service.
 - If the system sits behind a SAProuter, its **SAProuter String**, plus
-  **SAProuter Host** for the same reason.
+  **SAProuter Host** — the bare hostname, which is what the platform needs to
+  allow egress (a `/H/…/S/…` route string is not a hostname).
 
 Either a direct logon (**Application Server Host** + **System Number**) or a
 load-balanced logon (**Message Server Host** + **System ID** + **Logon Group**) is required.
@@ -41,6 +42,32 @@ load-balanced logon (**Message Server Host** + **System ID** + **Logon Group**) 
 BEx queries with mandatory variables must be listed explicitly with those variables
 bound — BW refuses to return a result until they have values.
 
+## Calling function modules
+
+The **SAP RFC Function Modules** protocol turns a call to a remote-enabled function
+module into a stream. Each entry under **Function Modules** names the module, the
+result parameter whose rows become the records (**Result Parameter**, e.g.
+`/FLIGHT_LIST`), and the **Parameters** to pass. Leave the result parameter empty to
+emit the module's scalar export parameters as a single record.
+
+Parameter values are written as JSON and cast to the SAP type the module declares, so
+a date can be given either as `20260102` or `2026-01-02`. Nested SAP structures and
+table parameters are written as JSON objects and arrays.
+
+**Slice By** calls the module once per value of one parameter, in parallel, and unions
+the results — useful for a BAPI that only accepts one company code or airline per call.
+
+:::warning
+The connector cannot tell a function module that reads from one that writes. Only the
+modules you list are ever called, and discovery never calls them at all — schemas come
+from the module's interface metadata. Choosing read-only modules is your
+responsibility. Give the connector's SAP user `S_RFC` authorization for exactly the
+function groups it needs and no more.
+:::
+
+Failures are not silent: a BAPI that answers with `TYPE = 'E'` or `'A'` in its `RETURN`
+table fails the stream with the SAP message attached, rather than syncing zero records.
+
 ## Supported sync modes
 
 | Feature | Supported |
@@ -51,6 +78,10 @@ bound — BW refuses to return a result until they have values.
 | Incremental - Append + Deduped | Yes |
 | Change Data Capture | Yes, for both ODP protocols |
 | Namespaces | No |
+
+**Function modules** sync incrementally when you set both a **Cursor Field** (a result
+column) and a **Cursor Parameter** (the import parameter the stored value is passed to
+on the next run).
 
 **RFC** syncs incrementally when you nominate a **Cursor Field** — a date or
 timestamp column. The connector keeps the highest value it has seen and pushes a
@@ -85,6 +116,7 @@ Streams are whatever your pattern and object list select. Stream names are:
 - **BICS** — the name you give the object
 - **ODP (RFC)** — `<context>/<provider>`, e.g. `ABAP_CDS/SEPM_IBUPA$P`
 - **ODP (OData)** — the entity-set name, e.g. `FactsOfZJRODPVSQL`
+- **Function modules** — the name you give the entry
 
 ## Performance
 

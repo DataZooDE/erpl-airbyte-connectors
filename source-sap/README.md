@@ -78,8 +78,10 @@ ERPL_SAP_ODP_ODATA_URL='http://localhost:50000/sap/opu/odata/sap/Z_ODP_DL2_SRV/F
 
 ## Licence
 
-See [LICENSE](../LICENSE). The ERPL extensions themselves are licensed separately
-under BSL 1.1 by DataZoo GmbH.
+Business Source License 1.1 — see [LICENSE](../LICENSE). Production use is
+permitted, but not offering the connector to third parties on a hosted or
+embedded basis. The licence converts to MPL 2.0 five years after publication.
+The ERPL extensions it loads are licensed the same way.
 
 ## Reference systems
 

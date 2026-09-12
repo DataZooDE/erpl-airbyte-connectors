@@ -5,7 +5,7 @@ data:
   dockerRepository: datazoo/source-sap
   dockerImageTag: 1.0.0
   name: SAP
-  license: MIT
+  license: BUSL-1.1
   releaseDate: "2026-09-12"
   releaseStage: alpha
   supportLevel: community
@@ -16,14 +16,13 @@ data:
   # SAP ODP extractions can spend a long time preparing before the first packet.
   maxSecondsBetweenMessages: 7200
   allowedHosts:
-    # These are interpolated from the connection config, so they must name hosts.
-    # `base_url` is a full URL and `saprouter` is a /H/host/S/port route string,
-    # neither of which is a hostname -- the spec carries plain host fields
-    # alongside them for exactly this.
+    # The platform's ConfigReplacer sanitizes each resolved value down to a bare
+    # hostname, so a full URL like base_url works as-is. A SAProuter string
+    # (/H/host/S/3299) does not survive that, hence the separate host field.
     hosts:
       - ${ashost}
       - ${mshost}
-      - ${gateway_host}
+      - ${base_url}
       - ${saprouter_host}
   registryOverrides:
     oss:

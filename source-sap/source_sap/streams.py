@@ -17,15 +17,12 @@ from airbyte_cdk.sources.types import Record
 from source_sap.errors import traced
 from source_sap.protocols.base import ProtocolDriver, ReadPlan, SapObject
 from source_sap.session import ErplSession
-from source_sap.types import coerce_row
 
 logger = logging.getLogger("airbyte")
 
 # How often a long-running scan reports progress, so the platform's
 # maxSecondsBetweenMessages budget is not hit during a slow SAP fetch.
 _HEARTBEAT_SECONDS = 60
-_FETCH_BATCH = 10_000
-
 CDC_DELETED_AT = "_ab_cdc_deleted_at"
 
 
@@ -40,6 +37,7 @@ class ErplPartition(Partition):
         change_mode_field: str | None,
         row_filter: Any | None = None,
         cursor: Any | None = None,
+        driver: Any | None = None,
     ) -> None:
         self._stream_name = stream_name
         self._session = session
@@ -47,6 +45,7 @@ class ErplPartition(Partition):
         self._change_mode_field = change_mode_field
         self._row_filter = row_filter
         self._cursor = cursor
+        self._driver = driver
 
     def stream_name(self) -> str:
         return self._stream_name
@@ -61,26 +60,20 @@ class ErplPartition(Partition):
     def read(self) -> Iterable[Record]:
         cursor = self._session.cursor()
         try:
-            for statement in self._plan.slice_.get("setup", ()):  # BICS session setup
-                cursor.execute(statement)
-            result = self._plan.execute(cursor)
-            columns = [d[0] for d in result.description or []]
             last_beat = time.monotonic()
             emitted = 0
-            while True:
-                rows = result.fetchmany(_FETCH_BATCH)
-                if not rows:
-                    break
-                for row in rows:
-                    data = coerce_row(columns, row)
-                    if self._row_filter is not None and self._row_filter(data):
-                        continue
-                    if self._change_mode_field:
-                        self._apply_change_mode(data)
-                    yield Record(data=data, stream_name=self._stream_name)
-                emitted += len(rows)
+            for data in self._driver.records_from(self._plan, cursor):
+                if self._row_filter is not None and self._row_filter(data):
+                    continue
+                if self._change_mode_field:
+                    self._apply_change_mode(data)
+                yield Record(data=data, stream_name=self._stream_name)
+                emitted += 1
                 now = time.monotonic()
                 if now - last_beat >= _HEARTBEAT_SECONDS:
+                    # A LOG message is a protocol message, so this also keeps the
+                    # platform's maxSecondsBetweenMessages budget from expiring
+                    # during a long SAP extraction.
                     logger.info("%s: %d records read so far.", self._stream_name, emitted)
                     last_beat = now
         except Exception as exc:
@@ -149,6 +142,7 @@ class ErplPartitionGenerator(PartitionGenerator):
                 change_field,
                 self._row_filter,
                 cursor=self._cursor,
+                driver=self._driver,
             )
 
     def _mark_cursor_failed(self) -> None:

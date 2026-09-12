@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import threading
 from collections.abc import Mapping
 from typing import Any
 
@@ -28,7 +29,7 @@ from source_sap.protocols.base import (
 )
 from source_sap.retry import retry_transient
 from source_sap.session import ErplSession
-from source_sap.types import json_schema_for_fields, primary_key_for_fields
+from source_sap.types import coerce_value, json_schema_for_fields, primary_key_for_fields
 
 logger = logging.getLogger("airbyte")
 
@@ -72,6 +73,13 @@ def _lit(value: str) -> str:
 class OdpRfcDriver(ProtocolDriver):
     mode = "odp_rfc"
     required_extensions = ("erpl_rfc", "erpl_odp")
+
+    def __init__(self, config: Mapping[str, Any]) -> None:
+        super().__init__(config)
+        # Streams whose delta read was skipped because SAP reported no change.
+        # They opened no cursor, so there is nothing to close afterwards.
+        self._skipped: set[str] = set()
+        self._skipped_lock = threading.Lock()
 
     # ---- discovery ------------------------------------------------------------
 
@@ -217,6 +225,38 @@ class OdpRfcDriver(ProtocolDriver):
             )
         return selected
 
+    def last_modified(self, session: ErplSession, context: str, odp_name: str) -> str | None:
+        """The ODP object's last-changed timestamp, without fetching any rows.
+
+        One RFC call and no extraction, so it is worth spending before opening a
+        delta cursor on a stream that is usually quiet. Returns None when SAP
+        cannot say -- the probe is an optimisation and must never fail a sync.
+        """
+        try:
+            row = (
+                session.cursor()
+                .execute(f"SELECT * FROM sap_odp_get_last_modified({_lit(context)}, {_lit(odp_name)})")
+                .fetchone()
+            )
+        except Exception as exc:
+            logger.debug("Last-modified probe for %s/%s failed: %s", context, odp_name, exc)
+            return None
+        if not row or row[1] is None:
+            return None
+        return str(coerce_value(row[1]))
+
+    def _is_unchanged(self, session: ErplSession, obj: SapObject, state: Mapping[str, Any]) -> bool:
+        """True when SAP reports the object has not changed since the last run."""
+        if self.options.get("skip_unchanged") is False:
+            return False
+        previous = state.get("last_modified")
+        if not (previous and state.get("initialized")):
+            return False  # nothing to compare against, or no DELTAINIT yet
+        current = self.last_modified(session, str(obj.meta["context"]), str(obj.meta["odp_name"]))
+        if current is None:
+            return False
+        return current == str(previous)
+
     # ---- reading --------------------------------------------------------------
 
     def read_plans(
@@ -227,6 +267,14 @@ class OdpRfcDriver(ProtocolDriver):
         override = self._object_overrides().get(odp_name, {})
 
         if incremental:
+            if self._is_unchanged(session, obj, state):
+                logger.info(
+                    "%s is unchanged on SAP since the last sync; skipping the delta read.",
+                    obj.name,
+                )
+                with self._skipped_lock:
+                    self._skipped.add(obj.name)
+                return []
             subscriber = str(state.get("subscriber_process") or obj.meta["subscriber_process"])
             args = [_lit(context), _lit(odp_name), _lit(subscriber)]
             # Deliberately no THREADS: erpl caps delta fetch to one worker because
@@ -273,10 +321,16 @@ class OdpRfcDriver(ProtocolDriver):
         state["context"] = obj.meta["context"]
         state["odp_name"] = obj.meta["odp_name"]
         state["initialized"] = True
+        current = self.last_modified(session, str(obj.meta["context"]), str(obj.meta["odp_name"]))
+        if current is not None:
+            state["last_modified"] = current
         return state
 
     def on_success(self, session: ErplSession, obj: SapObject, state: Mapping[str, Any]) -> None:
         """Release the server-side delta cursor; the subscription itself survives."""
+        with self._skipped_lock:
+            if obj.name in self._skipped:
+                return  # nothing was opened, so there is nothing to close
         # `on_success` runs before `next_state`, so on the first incremental run
         # the state blob is still empty -- fall back to the derived name the read
         # actually used, or the DELTAINIT leaves a cursor reserved on SAP.
