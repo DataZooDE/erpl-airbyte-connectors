@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import re
 from collections.abc import Iterator, Mapping, Sequence
 from typing import Any
 
@@ -120,14 +121,32 @@ def find_return_field(columns: Sequence[str], configured: str | None = None) -> 
     return None
 
 
+#: A DDIC-derived type string: identifiers, the punctuation DuckDB needs for
+#: STRUCT and DECIMAL, and nothing that could start a second statement.
+_SAFE_TYPE = re.compile(r'^[A-Za-z0-9_,() \[\]"]+$')
+
+
+def is_sap_type_safe(duckdb_type: str) -> bool:
+    """Whether a type string SAP reported is safe to interpolate into SQL.
+
+    Config values are funnelled through `sql_string_literal`, but these come
+    from `sap_rfc_describe_function` and are spliced in as SQL *syntax*, which
+    no amount of quoting would cover. It is a trust-boundary question rather
+    than a user-input hole -- it needs a hostile or compromised SAP, or a MITM
+    on the unencrypted RFC transport -- and it is cheap to close.
+    """
+    text = str(duckdb_type).strip()
+    if not text or not _SAFE_TYPE.match(text):
+        return False
+    return "--" not in text and "/*" not in text
+
+
 def _struct_field_names(duckdb_type: str) -> list[str]:
     """Field names of a STRUCT type string, good enough to recognise BAPIRET."""
-    import re as _re
-
     if not duckdb_type.upper().startswith("STRUCT("):
         return []
     inner = duckdb_type[duckdb_type.index("(") + 1 : duckdb_type.rindex(")")]
-    return [m.group(1).strip('"').upper() for m in _re.finditer(r'(?:^|,)\s*("?[\w]+"?)\s', inner)]
+    return [m.group(1).strip('"').upper() for m in re.finditer(r'(?:^|,)\s*("?[\w]+"?)\s', inner)]
 
 
 def is_bapi_failure(return_table: Any) -> bool:
@@ -221,6 +240,7 @@ class RfcInvokeDriver(ProtocolDriver):
                         "cursor_parameter": cursor_parameter,
                         "slice_by": slice_by,
                         "return_field": self._return_field(function, described, entry),
+                        "export_fields": None if path else list(schema["properties"]),
                         "parameter_types": {
                             str(p["name"]): str(p.get("duckdb_type") or "")
                             for block in PARAMETER_BLOCKS
@@ -343,7 +363,10 @@ class RfcInvokeDriver(ProtocolDriver):
             f"{p['name']} {p['duckdb_type']}"
             for block in ("export", "changing")
             for p in described.get(block, [])
-            if p.get("name") and not str(p.get("duckdb_type", "")).endswith("[]")
+            if p.get("name")
+            and not str(p.get("duckdb_type", "")).endswith("[]")
+            and is_sap_type_safe(str(p.get("duckdb_type", "")))
+            and is_sap_type_safe(str(p["name"]))
         ]
         if not fields:
             raise config_error(
@@ -375,6 +398,8 @@ class RfcInvokeDriver(ProtocolDriver):
         if value is None or isinstance(value, (Mapping, list, tuple, bool)):
             return sql_struct_literal(value)
         try:
+            if declared and not is_sap_type_safe(declared):
+                declared = ""  # fall through to a plain literal
             if declared == "DATE":
                 return f"DATE {sql_string_literal(_sap_date(str(value)))}"
             if declared == "TIME":
@@ -401,6 +426,11 @@ class RfcInvokeDriver(ProtocolDriver):
         string that `sap_rfc_describe_function` reported, and the resulting
         column descriptions go through the same path as every other protocol.
         """
+        if not is_sap_type_safe(duckdb_type):
+            raise config_error(
+                f"SAP reported an unexpected parameter type {duckdb_type!r}. The connector "
+                "will not interpolate it into a query."
+            )
         element = duckdb_type.strip()
         if element.endswith("[]"):
             element = element[:-2]
@@ -458,6 +488,7 @@ class RfcInvokeDriver(ProtocolDriver):
                 "function": function,
                 "path_field": obj.meta.get("path_field"),
                 "return_field": obj.meta.get("return_field"),
+                "export_fields": obj.meta.get("export_fields"),
             },
         )
 
@@ -478,7 +509,14 @@ class RfcInvokeDriver(ProtocolDriver):
         path_field = plan.slice_.get("path_field")
         if not path_field:
             # No path: the scalar export parameters are the single record.
-            yield {key: coerce_value(value) for key, value in values.items() if not isinstance(value, list)}
+            # Projected against what discovery promised, so the records and the
+            # schema cannot disagree about which fields exist.
+            declared = plan.slice_.get("export_fields")
+            yield {
+                key: coerce_value(value)
+                for key, value in values.items()
+                if not isinstance(value, list) and (declared is None or key in declared)
+            }
             return
 
         for entry in values.get(path_field) or []:

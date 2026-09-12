@@ -4,7 +4,7 @@ from source_sap.streams import CDC_DELETED_AT, ErplPartition
 
 
 def apply(marker):
-    partition = ErplPartition("s", session=None, plan=None, change_mode_field="ODQ_CHANGEMODE")
+    partition = ErplPartition("s", session=None, plan=None, change_mode_field="ODQ_CHANGEMODE", driver=None)
     data = {"ID": "1", "ODQ_CHANGEMODE": marker}
     partition._apply_change_mode(data)
     return data

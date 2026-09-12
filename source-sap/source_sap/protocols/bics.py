@@ -92,6 +92,7 @@ class BicsDriver(ProtocolDriver):
         return f"Connected to SAP BW via BICS ({rows[0] if rows else 0} InfoProviders visible)."
 
     def discover(self, session: ErplSession) -> list[SapObject]:
+        self.check_incremental_config()
         cursor = session.cursor()
         objects: list[SapObject] = []
         for name, override in self._selected(session).items():
@@ -107,6 +108,7 @@ class BicsDriver(ProtocolDriver):
                 SapObject(
                     name=name,
                     json_schema=schema,
+                    primary_key=[[k] for k in (override.get("primary_key") or [])] or None,
                     supports_incremental=self.supports_incremental(override),
                     meta={
                         "cube": cube,
@@ -187,6 +189,21 @@ class BicsDriver(ProtocolDriver):
         return overrides
 
     # ---- the stateful workflow ------------------------------------------------
+
+    def check_incremental_config(self) -> None:
+        """A BICS watermark re-reads its boundary period, so dedupe needs a key.
+
+        The variable restricts the query to `>= last seen`, which necessarily
+        includes the period the last run ended in. Without a declared primary key
+        the destination cannot dedupe those rows and every run appends duplicates.
+        """
+        for name, override in self._object_overrides().items():
+            if self.supports_incremental(override) and not override.get("primary_key"):
+                raise config_error(
+                    f"BW object {name!r} is configured for incremental sync but declares no "
+                    "primary_key. The watermark re-reads the boundary period on every run, "
+                    "so a key is needed for the destination to deduplicate it."
+                )
 
     @staticmethod
     def supports_incremental(override: Mapping[str, Any]) -> bool:

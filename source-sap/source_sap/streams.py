@@ -41,9 +41,9 @@ class ErplPartition(Partition):
         session: ErplSession,
         plan: ReadPlan,
         change_mode_field: str | None,
+        driver: Any,
         row_filter: Any | None = None,
         cursor: Any | None = None,
-        driver: Any | None = None,
     ) -> None:
         self._stream_name = stream_name
         self._session = session
@@ -150,9 +150,9 @@ class ErplPartitionGenerator(PartitionGenerator):
                 self._session,
                 plan,
                 change_field,
-                self._row_filter,
+                self._driver,
+                row_filter=self._row_filter,
                 cursor=self._cursor,
-                driver=self._driver,
             )
 
     def _mark_cursor_failed(self) -> None:

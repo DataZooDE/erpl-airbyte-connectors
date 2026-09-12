@@ -52,7 +52,9 @@ def _reading_session(rows=(("x",),)):
 
 def test_a_read_failure_marks_the_cursor_failed():
     cursor, repo, driver = _cursor()
-    partition = ErplPartition("S", _exploding_session(), ReadPlan(sql="SELECT 1"), None, cursor=cursor)
+    partition = ErplPartition(
+        "S", _exploding_session(), ReadPlan(sql="SELECT 1"), None, driver=_driver(), cursor=cursor
+    )
     with pytest.raises(AirbyteTracedException):
         list(partition.read())
     cursor.ensure_at_least_one_state_emitted()
@@ -83,7 +85,7 @@ def test_a_cursor_without_mark_failed_is_tolerated():
     # FieldValueCursor and NoStateCursor have no mark_failed; the partition must
     # not break on them.
     session = _exploding_session()
-    partition = ErplPartition("S", session, ReadPlan(sql="SELECT 1"), None, cursor=MagicMock(spec=[]))
+    partition = ErplPartition("S", session, ReadPlan(sql="SELECT 1"), None, driver=_driver(), cursor=MagicMock(spec=[]))
     with pytest.raises(AirbyteTracedException):
         list(partition.read())
 

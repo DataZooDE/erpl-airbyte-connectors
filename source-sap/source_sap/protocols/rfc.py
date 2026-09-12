@@ -209,6 +209,11 @@ class RfcDriver(ProtocolDriver):
 
         resume_from = state.get(RESUME_FIELD)
         resume_field = obj.meta.get("resume_key")
+        if resume_field and not CURSOR_FIELD_PATTERN.match(str(resume_field).upper()):
+            # It comes from SAP's own field list, but it is interpolated bare
+            # into the ABAP fragment, so it gets the same check as cursor_field.
+            logger.warning("Ignoring an unusable resume key %r.", resume_field)
+            resume_field = None
         if (
             not incremental
             and resume_from not in (None, "")
