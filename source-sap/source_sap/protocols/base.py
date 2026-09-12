@@ -136,12 +136,6 @@ class ProtocolDriver(ABC):
         """Record field holding the resume point, when the stream is resumable."""
         return None
 
-    def concurrency_group(self, obj: SapObject) -> str:
-        """Non-empty to stop streams sharing a server-side resource running together."""
-        return ""
-
-    # ---- shared helpers -------------------------------------------------------
-
     def _object_overrides(self) -> dict[str, Mapping[str, Any]]:
         """Per-object overrides from the config, keyed by object name."""
         overrides: dict[str, Mapping[str, Any]] = {}

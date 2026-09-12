@@ -143,7 +143,9 @@ connectionSpecification:
                 Split each table scan into this many row ranges read in parallel. Off by
                 default, because it only helps narrow extracts: measured on a 164,673-row
                 table, 8 partitions was 4.3x faster when one column was selected and 2.9x
-                *slower* when all 55 were. Raise it together with Columns, and measure.
+                *slower* when all 55 were — and the connector cannot use even the faster
+                case, because its ceiling is emitting records rather than extracting them.
+                Raise it only with a measurement in hand.
                 Rows then arrive in an unspecified order, which Airbyte does not mind.
               type: integer
               default: 0

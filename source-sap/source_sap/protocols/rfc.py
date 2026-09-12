@@ -233,8 +233,11 @@ class RfcDriver(ProtocolDriver):
             combined = " AND ".join(f"( {p} )" for p in predicates) if len(predicates) > 1 else predicates[0]
             args.append(f"FILTER := {_sql_literal(combined)}")
 
+        # Stated unconditionally: an omitted PARTITIONS meant one thing here and
+        # another to is_resumable, which decided whether a resume point was safe.
+        args.append(f"PARTITIONS := {partitions}")
+
         for cfg_key, sql_key, low, high in (
-            ("partitions", "PARTITIONS", 0, 64),
             ("fetch_size", "FETCH_SIZE", 1, 4_000_000),
             ("threads", "THREADS", 0, 32),
             ("max_rows", "MAX_ROWS", 0, 2_147_483_647),

@@ -61,6 +61,14 @@ class _BaseCursor(Cursor):
         except (TypeError, ValueError):
             return (1, 0.0, str(value))
 
+    def mark_failed(self) -> None:
+        """Called when the stream did not finish. Cursors that persist a
+        position override this to suppress their checkpoint."""
+
+    def checkpoint(self) -> None:
+        """Called periodically during a read. Only a cursor that can safely
+        resume mid-stream does anything here."""
+
     def _emit(self, state: Mapping[str, Any]) -> None:
         self._state_manager.update_state_for_stream(self._stream_name, self._namespace, dict(state))
         self._message_repository.emit_message(

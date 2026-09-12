@@ -81,11 +81,10 @@ def test_one_failed_partition_out_of_several_suppresses_the_checkpoint():
     assert list(repo.consume_queue()) == []
 
 
-def test_a_cursor_without_mark_failed_is_tolerated():
-    # FieldValueCursor and NoStateCursor have no mark_failed; the partition must
-    # not break on them.
+def test_a_partition_without_a_cursor_is_tolerated():
+    """check and discover build partitions with no cursor at all."""
     session = _exploding_session()
-    partition = ErplPartition("S", session, ReadPlan(sql="SELECT 1"), None, driver=_driver(), cursor=MagicMock(spec=[]))
+    partition = ErplPartition("S", session, ReadPlan(sql="SELECT 1"), None, driver=_driver(), cursor=None)
     with pytest.raises(AirbyteTracedException):
         list(partition.read())
 

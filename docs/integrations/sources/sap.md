@@ -121,12 +121,13 @@ Streams are whatever your pattern and object list select. Stream names are:
 ## Performance
 
 - **Columns** is the setting that matters most. Naming the fields you actually
-  want pushes the projection into SAP and was worth **3x** on a 55-column table.
+  want pushes the projection into SAP and was worth **3.9x** on a 55-column table.
 - **Partitions** (RFC) splits one table scan into row ranges read in parallel,
   and is **off by default** because it only helps narrow extracts: measured on a
   164,673-row table, 8 partitions was 4.3x faster reading one column and 2.9x
-  *slower* reading all 55. Raise it together with a short **Columns** list, and
-  measure. Rows then arrive in an unspecified order, which does not affect
+  *slower* reading all 55 — and even in the fast regime the connector cannot use
+  the headroom, because its ceiling is emitting records rather than extracting
+  them. Raise it only with a measurement in hand. Rows then arrive in an unspecified order, which does not affect
   correctness. See [performance](../../performance.md).
 - **Threads** (ODP) parallelises full extractions. Delta extractions always run
   single-threaded: a parallel multi-package delta can under-count.

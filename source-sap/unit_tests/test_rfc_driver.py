@@ -64,7 +64,7 @@ class TestReadPlans:
         sql = d.read_plans(None, obj, incremental=True, state={"FLDATE": "20260101"})[0].sql
         # The predicate is an ABAP WHERE fragment inside a DuckDB string literal,
         # so every quote is doubled once on the way in.
-        assert sql == ("SELECT * FROM sap_read_table('SFLIGHT', FILTER := 'FLDATE >= ''20260101''')")
+        assert sql == ("SELECT * FROM sap_read_table('SFLIGHT', FILTER := 'FLDATE >= ''20260101''', PARTITIONS := 0)")
 
     def test_incremental_without_prior_state_reads_everything(self):
         d = driver(objects=[{"name": "SFLIGHT", "cursor_field": "FLDATE"}])
@@ -85,7 +85,7 @@ class TestReadPlans:
         ].sql
         # Every attacker quote is doubled twice over, so the payload stays
         # inside the FILTER literal and cannot close it.
-        assert sql.endswith("FILTER := 'FLDATE >= ''x'''' OR ''''1''''=''''1''')")
+        assert "FILTER := 'FLDATE >= ''x'''' OR ''''1''''=''''1'''" in sql
         assert sql.count("'") % 2 == 0
 
 

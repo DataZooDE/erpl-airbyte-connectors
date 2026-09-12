@@ -75,10 +75,8 @@ class ErplPartition(Partition):
                     self._apply_change_mode(data)
                 yield Record(data=data, stream_name=self._stream_name)
                 emitted += 1
-                if emitted % _CHECKPOINT_RECORDS == 0:
-                    checkpoint = getattr(self._cursor, "checkpoint", None)
-                    if checkpoint is not None:
-                        checkpoint()
+                if emitted % _CHECKPOINT_RECORDS == 0 and self._cursor is not None:
+                    self._cursor.checkpoint()
                 now = time.monotonic()
                 if now - last_beat >= _HEARTBEAT_SECONDS:
                     # A LOG message is a protocol message, so this also keeps the
@@ -90,9 +88,8 @@ class ErplPartition(Partition):
             # The CDK calls ensure_at_least_one_state_emitted() even for a stream
             # that raised, so a server-side position would otherwise advance past
             # rows that were never emitted.
-            mark_failed = getattr(self._cursor, "mark_failed", None)
-            if mark_failed is not None:
-                mark_failed()
+            if self._cursor is not None:
+                self._cursor.mark_failed()
             raise traced(f"Failed reading {self._stream_name}", exc, stream_name=self._stream_name) from exc
 
     def _apply_change_mode(self, data: dict[str, Any]) -> None:
@@ -156,9 +153,8 @@ class ErplPartitionGenerator(PartitionGenerator):
             )
 
     def _mark_cursor_failed(self) -> None:
-        mark_failed = getattr(self._cursor, "mark_failed", None)
-        if mark_failed is not None:
-            mark_failed()
+        if self._cursor is not None:
+            self._cursor.mark_failed()
 
 
 class SapStream(DefaultStream):
@@ -169,15 +165,26 @@ class SapStream(DefaultStream):
     incremental when a CursorField is set, so the flag is applied here instead.
     """
 
-    def __init__(self, *args: Any, supports_incremental: bool = False, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *args: Any,
+        supports_incremental: bool = False,
+        resumable: bool = False,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._supports_incremental = supports_incremental
+        self._resumable = resumable
 
     def as_airbyte_stream(self) -> AirbyteStream:
         stream = super().as_airbyte_stream()
         if self._supports_incremental and SyncMode.incremental not in stream.supported_sync_modes:
             stream.supported_sync_modes.append(SyncMode.incremental)
             stream.source_defined_cursor = True
+            stream.is_resumable = True
+        elif self._resumable:
+            # Resumable full refresh: without this the platform does not keep the
+            # stream's state between attempts, and the resume point never returns.
             stream.is_resumable = True
         return stream
 
@@ -211,8 +218,7 @@ def build_stream(
         cursor=cursor,
         namespace=namespace,
         supports_incremental=sap_object.supports_incremental,
-        # Stops two streams racing the same server-side ODP position.
-        block_simultaneous_read=driver.concurrency_group(sap_object),
+        resumable=driver.is_resumable(sap_object),
     )
 
 

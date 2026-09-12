@@ -263,10 +263,13 @@ class OdpRfcDriver(ProtocolDriver):
         changes that landed during the sync as already consumed, and the next run
         would skip them.
         """
-        if self.options.get("skip_unchanged") is False:
-            return False
+        # The probe always runs, before the read: `skip_unchanged` governs only
+        # whether its result may skip the extraction. Taking the reading after
+        # the read would stamp changes that landed during the sync as consumed.
         current = self.last_modified(session, str(obj.meta["context"]), str(obj.meta["odp_name"]))
         self._remember_probe(obj.name, current)
+        if self.options.get("skip_unchanged") is False:
+            return False
 
         previous = state.get("last_modified")
         if not (previous and state.get("initialized")):
@@ -388,7 +391,3 @@ class OdpRfcDriver(ProtocolDriver):
                 obj.name,
                 status,
             )
-
-    def concurrency_group(self, obj: SapObject) -> str:
-        # Two delta reads sharing a subscriber process would race the server-side pointer.
-        return str(obj.meta.get("subscriber_process") or "")

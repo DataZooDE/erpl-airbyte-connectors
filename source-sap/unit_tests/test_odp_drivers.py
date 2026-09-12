@@ -56,10 +56,6 @@ class TestOdpRfcPlans:
         sql = rfc_driver(threads=8).read_plans(None, self._obj(), incremental=False, state={})[0].sql
         assert "THREADS := 8" in sql
 
-    def test_delta_streams_share_a_concurrency_group(self):
-        d = rfc_driver()
-        assert d.concurrency_group(self._obj(subscriber_process="AB_X")) == "AB_X"
-
     def test_state_records_the_subscriber_process(self):
         d = rfc_driver()
         state = d.next_state(None, self._obj(subscriber_process="AB_X"), {})

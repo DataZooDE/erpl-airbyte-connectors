@@ -107,9 +107,17 @@ def build_matrix() -> list[Case]:
         rfc_case("rfc-p16", f"RFC {DEFAULT_TABLE}, 16 partitions", DEFAULT_TABLE, partitions=16),
         rfc_case(
             "rfc-projection",
-            f"RFC {DEFAULT_TABLE}, 2 of N columns",
+            f"RFC {DEFAULT_TABLE}, 2 of N columns, serial",
             DEFAULT_TABLE,
-            "projection pushed to SAP",
+            "differs from the serial baseline in the projection alone",
+            partitions=0,
+            columns=["TABNAME", "TABCLASS"],
+        ),
+        rfc_case(
+            "rfc-projection-p8",
+            f"RFC {DEFAULT_TABLE}, 2 of N columns, 8 partitions",
+            DEFAULT_TABLE,
+            "narrow extracts are the regime where partitioning pays",
             partitions=8,
             columns=["TABNAME", "TABCLASS"],
         ),
@@ -271,6 +279,10 @@ def measure(case: Case, repeat: int, workdir: Path) -> Result:
         ]
     }
     result = Result(case=case)
+    # Every figure for a case comes from one run: pairing a record count from one
+    # attempt with a duration from another is how a harness reports a rate that
+    # never happened.
+    best = None
     for attempt in range(repeat):
         messages, elapsed, rss_mb, out_bytes = run_connector(case, "read", workdir, catalog)
         records = sum(1 for m in messages if m.get("type") == "RECORD")
@@ -278,13 +290,13 @@ def measure(case: Case, repeat: int, workdir: Path) -> Result:
         if errors:
             raise RuntimeError(f"{case.key}: {errors[0]['trace']['error']['message']}")
         result.runs.append(elapsed)
-        if attempt == 0 or elapsed < result.seconds:
-            result.seconds, result.peak_rss_mb, result.bytes_out = elapsed, rss_mb, out_bytes
-        result.records = records
+        if best is None or elapsed < best[0]:
+            best = (elapsed, records, rss_mb, out_bytes)
         print(
             f"    run {attempt + 1}/{repeat}: {records:,} records in {elapsed:.1f}s ({records / elapsed:,.0f} rec/s)",
             flush=True,
         )
+    result.seconds, result.records, result.peak_rss_mb, result.bytes_out = best
     return result
 
 
@@ -292,7 +304,7 @@ def render_markdown(results: list[Result], repeat: int) -> str:
     import platform
 
     lines = [
-        "# Replication performance",
+        "# Replication performance: measured figures",
         "",
         "Measured end to end: the connector runs as a subprocess, exactly as the Airbyte",
         "platform runs it, and RECORD messages are counted against wall-clock time. The",
@@ -353,7 +365,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", action="append", help="run only these case keys")
     parser.add_argument("--repeat", type=int, default=1)
-    parser.add_argument("--markdown", type=Path, help="write a report here")
+    parser.add_argument(
+        "--markdown",
+        type=Path,
+        default=Path("../docs/performance-raw.md"),
+        help="where to write the measured table (default: docs/performance-raw.md). "
+        "docs/performance.md is hand-written prose citing it, and is never generated.",
+    )
     parser.add_argument("--list", action="store_true", help="list the cases and exit")
     parser.add_argument("--allow-busy", action="store_true", help="measure even if something else is using SAP")
     args = parser.parse_args()

@@ -290,6 +290,3 @@ class OdpODataDriver(ProtocolDriver):
                 obj.name,
             )
         return state
-
-    def concurrency_group(self, obj: SapObject) -> str:
-        return str(obj.meta.get("entity_set_url") or "")
