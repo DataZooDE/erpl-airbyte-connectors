@@ -152,7 +152,10 @@ connectionSpecification:
               order: 2
             fetch_size:
               title: Fetch Size
-              description: Rows requested per SAP round trip. Higher uses more memory per worker.
+              description: >-
+                Bytes requested per SAP round trip, not rows -- so a wide row means
+                fewer rows per call. Scaled with Partitions automatically when left
+                empty, because erpl divides this budget across partition workers.
               type: integer
               order: 3
             objects:
@@ -176,6 +179,11 @@ connectionSpecification:
                     title: SAP Filter
                     description: An ABAP WHERE fragment evaluated by SAP, for example "CARRID = 'LH'".
                     type: string
+                  primary_key:
+                    title: Primary Key
+                    description: Fields forming the record key, needed for deduplicating destinations.
+                    type: array
+                    items: {type: string}
                   cursor_field:
                     title: Cursor Field
                     description: >-
@@ -233,6 +241,14 @@ connectionSpecification:
                     title: Primary Key
                     type: array
                     items: {type: string}
+                  return_parameter:
+                    title: Return Parameter
+                    description: >-
+                      Which result table carries BAPI error messages. Only needed when the
+                      module names it something other than RETURN, E_RETURN, ET_RETURN,
+                      EX_RETURN, T_RETURN or RETURN_TAB. Getting this wrong means a failed
+                      call is read as an empty result.
+                    type: string
                   cursor_field:
                     title: Cursor Field
                     description: Result column whose highest value is tracked for incremental sync.
@@ -307,6 +323,11 @@ connectionSpecification:
                         high: {type: string}
                         sign: {type: string, enum: [I, E], default: I}
                         op: {type: string}
+                  primary_key:
+                    title: Primary Key
+                    description: Fields forming the record key, needed for deduplicating destinations.
+                    type: array
+                    items: {type: string}
                   cursor_variable:
                     title: Cursor Variable
                     description: >-
@@ -323,6 +344,33 @@ connectionSpecification:
                     title: Cursor Start
                     description: Value to use on the first run, before any state exists.
                     type: string
+                  filters:
+                    title: Member Filters
+                    description: Restrict a characteristic to the listed members.
+                    type: array
+                    items:
+                      type: object
+                      required: [characteristic]
+                      properties:
+                        characteristic: {type: string}
+                        members:
+                          type: array
+                          items: {type: string}
+                  variant:
+                    title: BEx Variant
+                    description: Name of a saved BEx variant used to fill the query's variables.
+                    type: string
+                  properties:
+                    title: Characteristic Properties
+                    description: >-
+                      Per-characteristic display settings, as SAP Analysis offers them.
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        characteristic: {type: string}
+                        property: {type: string, enum: [DISPLAY, SORT, TOTALS]}
+                        value: {type: string, examples: ["KEY", "TEXT", "BOTH", "ASC", "DESC", "HIDE"]}
                   slice_by:
                     title: Slice By
                     description: >-
@@ -381,6 +429,11 @@ connectionSpecification:
                 properties:
                   name: {title: ODP Name, type: string}
                   context: {type: string}
+                  primary_key:
+                    title: Primary Key
+                    description: Fields forming the record key, needed for deduplicating destinations.
+                    type: array
+                    items: {type: string}
                   subscriber_process:
                     title: Subscriber Process
                     description: >-
@@ -390,6 +443,21 @@ connectionSpecification:
                   columns:
                     type: array
                     items: {type: string}
+                  filters:
+                    title: Selection Filters
+                    description: >-
+                      Server-side selections, OR-combined. SAP's RODPS_REPL_S_SELECTION
+                      shape.
+                    type: array
+                    items:
+                      type: object
+                      required: [fieldname]
+                      properties:
+                        fieldname: {type: string}
+                        sign: {type: string, enum: [I, E], default: I}
+                        op: {type: string, examples: ["EQ", "BT", "GE", "CP"]}
+                        low: {type: string}
+                        high: {type: string}
                   threads: {type: integer}
         - title: SAP ODP (OData)
           required: [mode]

@@ -1,6 +1,6 @@
 # Incremental sync
 
-Three mechanisms, depending on protocol. Only two of them are genuine change
+Four mechanisms, depending on protocol. Only the two ODP ones are genuine change
 data.
 
 | Protocol | Mechanism | Deletes? |
@@ -40,8 +40,10 @@ without delta support is full-refresh only.
 
 This is the thing to understand before running ODP in production.
 
-For **ODP over RFC**, Airbyte state holds only a *name* — the subscriber
-process. SAP remembers how far that subscriber has read. So:
+For **ODP over RFC**, the *position* is on SAP: it remembers how far each
+subscriber has read. Airbyte state holds the subscriber's **name**, plus a
+last-changed timestamp used to skip an unchanged run — but nothing that says
+where in the data it stopped. So:
 
 - Two Airbyte connections reading the same provider **must not share a
   subscriber process**, or they consume each other's changes and each sees a

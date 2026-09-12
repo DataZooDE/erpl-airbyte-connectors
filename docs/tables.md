@@ -81,7 +81,8 @@ Field metadata comes from `sap_describe_fields`, which gives names, texts, DDIC
 types and which fields are key. That becomes the JSON Schema and the stream's
 primary key.
 
-DDIC types map as SAP means them, not as they look:
+DDIC types map as SAP means them, not as they look. The cases worth knowing —
+the full table is in [`source_sap/types.py`](../source-sap/source_sap/types.py):
 
 | SAP | JSON | Why |
 |---|---|---|
@@ -92,15 +93,17 @@ DDIC types map as SAP means them, not as they look:
 | `RAW`, `RAWSTRING` | string, base64 | |
 | `CLNT` | string | the client, constant for a connection |
 
-An unmapped type degrades to string with a warning rather than failing
-discovery.
+Types not in that table — `CHAR`, `INT4`, `FLTP` and the rest — map the obvious
+way. One SAP does not have an obvious mapping for degrades to string with a
+warning rather than failing discovery.
 
 ## Limits
 
 - `RFC_READ_TABLE` returns rows as fixed-width text, so very wide rows can be
   truncated by SAP. If you hit that, project fewer columns.
-- Some systems wrap `RFC_READ_TABLE` for authorization reasons. Set
-  `read_table_function` to the wrapper if yours does.
+- Some systems wrap `RFC_READ_TABLE` for authorization reasons, or prefer a
+  vendor variant. The ERPL extension supports several, but the connector does
+  not yet expose the choice — open an issue if your system needs one.
 
 ## See also
 

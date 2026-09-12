@@ -18,9 +18,25 @@ extensions. One connector, five ways into the system:
 Both ODP protocols sync incrementally through SAP's own delta mechanism and emit
 deletes as Airbyte CDC tombstones.
 
+## Install
+
+The connector runs as a Docker image, `linux/amd64` only — ERPL publishes no
+arm64 build.
+
+In Airbyte: **Settings → Sources → Add a new connector**
+
+```
+Docker repository:  datazoo/source-sap
+Docker image tag:   1.0.0
+```
+
+Everything below can also be driven from the command line, which is what the
+examples show. Building the image yourself, or running from a checkout, is in
+[development](docs/development.md).
+
 ## Getting started
 
-Four steps. The third is where SAP systems differ from each other.
+Five steps. The second is where SAP systems differ from each other.
 
 ### 1. See it run — no SAP needed
 
@@ -31,34 +47,20 @@ docker run --rm datazoo/source-sap:1.0.0 spec
 Prints the connector's configuration schema. If that works, the image is sound
 and everything from here is about SAP.
 
-### 2. Collect what you need
+### 2. Get what you need from Basis
 
 Three things, and the second is the one people underestimate:
 
-```
-SAP logon        ashost + sysnr (or mshost + sysid + group), client, user, password
-Authorizations   S_RFC for the function groups your protocol uses  -> docs/authorizations.md
-What to read     a table name, a function module, a BW query, an ODP provider
-```
+| | |
+|---|---|
+| **Logon** | `ashost` + `sysnr` (or `mshost` + `sysid` + `group`), `client`, `user`, `password` |
+| **Authorizations** | `S_RFC` for the function groups your protocol calls — hand them [authorizations.md](docs/authorizations.md) |
+| **What to read** | a table name, a function module, a BW query, or an ODP provider |
 
 For **ODP over OData** you also need the Gateway base URL and an activated
-service. For a system behind a SAProuter, add the router string.
+service. Behind a SAProuter, add the route string *and* the router's hostname.
 
-### 3. Check the connection
-
-In Airbyte: **Sources → New source → SAP**, fill in the logon, pick a protocol,
-and run the test. Or from the command line:
-
-```bash
-docker run --rm --network host -v "$PWD/config.json:/config.json:ro" \
-    datazoo/source-sap:1.0.0 check --config /config.json
-```
-
-A failure here is almost always one of three things — the host, the client, or a
-missing `S_RFC` authorization. The message says which;
-[troubleshooting](docs/troubleshooting.md) covers the rest.
-
-### 4. Get your first table out
+### 3. Write a config and check the connection
 
 ```json
 {
@@ -68,30 +70,44 @@ missing `S_RFC` authorization. The message says which;
 }
 ```
 
-Refresh the schema, select the stream, run the sync. Then make it fast: naming
-the columns you actually want is worth **3.8x** on a wide table
-([performance](docs/performance.md)).
+Save it as `config.json`. In the Airbyte UI the same fields are a form; from the
+command line:
+
+```bash
+docker run --rm --network host \
+    -v "$PWD/config.json:/config.json:ro" \
+    datazoo/source-sap:1.0.0 check --config /config.json
+```
+
+`--network host` works on Linux. On Docker Desktop (macOS, Windows) drop it and
+use `host.docker.internal` as the `ashost` instead.
+
+A failure here is almost always the host, the client, or a missing `S_RFC`
+authorization — the message says which, and
+[troubleshooting](docs/troubleshooting.md) covers the rest.
+
+### 4. Get your first table out
+
+Refresh the schema, select the `SFLIGHT` stream, run the sync.
+
+Then make it fast: naming the columns you actually want is worth **3.8x** on a
+wide table ([performance](docs/performance.md)).
+
+```json
+{ "protocol": { "mode": "rfc", "objects": [
+    { "name": "SFLIGHT", "columns": ["CARRID", "CONNID", "FLDATE", "PRICE"] }
+] } }
+```
 
 ### 5. Keep it in sync
 
-Full refresh is the default. For genuine change data, use ODP — the first
-incremental run returns a snapshot and registers a subscription on SAP; later
-runs return only what changed, with deletes as tombstones. See
-[incremental sync](docs/incremental.md), and read the subscription-hygiene
-section before you delete a connection.
+Full refresh is the default. For genuine change data — including deletes — use
+ODP: the first incremental run returns a snapshot and registers a subscription
+on SAP, and later runs return only what changed.
 
-## Install
-
-The image is `linux/amd64` only — ERPL publishes no arm64 build.
-
-```bash
-# in Airbyte: Settings -> Sources -> Add a new connector
-#   Docker repository:  datazoo/source-sap
-#   Docker image tag:   1.0.0
-```
-
-Building it yourself, or running the connector from a checkout, is in
-[development](docs/development.md).
+Read [incremental sync](docs/incremental.md) before you delete a connection: the
+subscription lives on SAP, and removing the connection without resetting the
+stream leaves it behind.
 
 ## Docs
 
@@ -123,8 +139,9 @@ Building it yourself, or running the connector from a checkout, is in
 - [`docs/registry-submission.md`](docs/registry-submission.md) — the Airbyte registry position, and why the licence check fails
 - [`docs/review-decisions.md`](docs/review-decisions.md) — review findings deliberately not acted on, with reasons
 
-The user-facing page Airbyte itself renders is
-[`docs/integrations/sources/sap.md`](docs/integrations/sources/sap.md).
+[`docs/integrations/sources/sap.md`](docs/integrations/sources/sap.md) is the
+page Airbyte itself renders inside the product. It covers the same ground as
+this index, in the shape the registry requires.
 
 ## Licence
 

@@ -49,9 +49,12 @@ blunter, so name your row axis.
 ```
 
 `sign` defaults to `I` (include) and `op` to `EQ`, or `BT` when a `high` is
-given. Repeat a name to fill a multi-value variable. A variable the query does
-not expose as input-ready is rejected, because BW would otherwise ignore it
-silently and return an unrestricted result.
+given. Repeat a name to fill a multi-value variable.
+
+The connector checks that every *mandatory, input-ready* variable of a BEx query
+has been given a value, and refuses the configuration otherwise — BW would
+return nothing and the reason would not be obvious. It does not police the
+reverse: a name the query does not expose is passed to BW, which ignores it.
 
 ## The memory problem, and slicing
 

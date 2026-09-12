@@ -97,6 +97,9 @@ class SourceSap(ConcurrentSourceAdapter):
 
     def check_connection(self, logger: logging.Logger, config: Mapping[str, Any]) -> tuple[bool, Any]:
         driver = self._driver(config)
+        # Says so before the connection is made, so the warning is visible even
+        # when the check itself then fails.
+        driver.warn_about_insecure_transport()
         with self._new_session(config, driver) as session:
             message = driver.check(session)
         logger.info(message)

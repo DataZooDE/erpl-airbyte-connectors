@@ -93,6 +93,42 @@ class TestReferencePageMatchesTheSpec:
         assert _rfc_branch()["properties"]["partitions"]["default"] == 0
 
 
+class TestReferenceDocumentsEveryField:
+    """`docs/reference.md` claims to list every field, and is maintained by hand.
+
+    It had already drifted: `return_parameter` was documented but missing from
+    the spec, and BICS filters, variants and display properties were supported
+    by the driver but reachable from neither.
+    """
+
+    def _documented(self) -> set[str]:
+        page = (DOCS / "reference.md").read_text()
+        return set(re.findall(r"`([a-z_]+(?:\[\]\.[a-z_]+)?)`", page))
+
+    def _spec_fields(self) -> set[str]:
+        fields = set()
+        for branch in SPEC["connectionSpecification"]["properties"]["protocol"]["oneOf"]:
+            for name in branch["properties"]:
+                if name != "mode":
+                    fields.add(name)
+            items = (branch["properties"].get("objects") or {}).get("items", {})
+            for name in items.get("properties", {}):
+                fields.add(f"objects[].{name}")
+        for name in SPEC["connectionSpecification"]["properties"]:
+            if name != "protocol":
+                fields.add(name)
+        return fields
+
+    def test_every_spec_field_appears_in_the_reference(self):
+        documented = self._documented()
+        missing = sorted(
+            field
+            for field in self._spec_fields()
+            if field not in documented and field.split("].")[-1] not in documented
+        )
+        assert not missing, "docs/reference.md says it lists every field but omits: " + ", ".join(missing)
+
+
 class TestInternalLinksResolve:
     def test_no_documentation_link_is_broken(self):
         root = DOCS.parent

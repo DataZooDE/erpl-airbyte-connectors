@@ -1,7 +1,9 @@
 # Configuration reference
 
-Every field the connector accepts. Generated from `source_sap/spec.yaml`, which
-is the authority — if this page and the spec disagree, the spec is right.
+Every field the connector accepts. This page mirrors `source_sap/spec.yaml` by
+hand — the spec is the authority, and a test fails if the two disagree about the
+documented ranges. If you find a difference the test does not catch, the spec is
+right.
 
 ## Connection
 
@@ -25,8 +27,9 @@ is the authority — if this page and the spec disagree, the spec is right.
 | `concurrency` | integer |  | How many streams to read in parallel. Each worker holds its own SAP connection, so raise this only as far as the SAP system has free work processes. |
 | `saprouter_host` | string |  | Hostname of the SAProuter, without the /H/ /S/ route syntax. Only needed so the platform can allow egress to it. |
 
-The **protocol** field is a choice of one of five modes, each with its own
-settings.
+The **protocol** field is a choice of one of five modes. Each carries its own
+settings, and an `objects` list naming what to read — that is where per-object
+settings live in every mode.
 
 ## `rfc` — tables and CDS views
 
@@ -66,8 +69,11 @@ Full guide: [calling function modules](function-modules.md).
 | `objects[].cube`, `query` | InfoProvider and BEx query. |
 | `objects[].rows`, `columns` | Characteristics and key figures. |
 | `objects[].variables` | BEx variables: `{name, low, high, sign, op}`. |
+| `objects[].variant` | A saved BEx variant, used to fill the query's variables instead. |
+| `objects[].filters` | Restrict a characteristic to listed members: `{characteristic, members}`. |
+| `objects[].properties` | Display settings per characteristic: `{characteristic, property, value}` — `DISPLAY`/`SORT`/`TOTALS`. |
 | `objects[].slice_by` | `{characteristic, members}` — one BICS session per member. |
-| `objects[].cursor_variable` + `cursor_field` + `primary_key` | Watermark incremental. |
+| `objects[].cursor_variable` + `cursor_field` + `cursor_start` + `primary_key` | Watermark incremental. `cursor_start` is the value used on the first run. |
 
 Full guide: [BW queries](bw-queries.md).
 
@@ -82,6 +88,7 @@ Full guide: [BW queries](bw-queries.md).
 | `objects[].name`, `context` | The provider. |
 | `objects[].subscriber_process` | The ODQ subscription key. Set it when two connections read the same provider. |
 | `objects[].columns` | Projection. |
+| `objects[].filters` | Server-side selections, OR-combined: `{fieldname, sign, op, low, high}`. |
 
 Full guide: [incremental sync](incremental.md).
 

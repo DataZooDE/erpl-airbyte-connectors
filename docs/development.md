@@ -1,14 +1,7 @@
 # Developing the connector
 
-Reads data out of SAP systems through the [ERPL](https://erpl.io) DuckDB extensions.
-One connector covers four access protocols:
-
-| Mode | Extension | What it reads |
-|---|---|---|
-| `rfc` | `erpl_rfc` | SAP tables and CDS views via `RFC_READ_TABLE` |
-| `bics` | `erpl_bics` | SAP BW cubes and BEx queries via BICS |
-| `odp_rfc` | `erpl_odp` | ODP providers (BW, ABAP_CDS, SAPI, HANA), full and delta |
-| `odp_odata` | `erpl_web` | ODP over the SAP Gateway OData protocol, full and delta |
+Building, testing and releasing `source-sap`. For what the connector does, see
+the [README](../README.md).
 
 ## Local development
 
@@ -82,12 +75,12 @@ ERPL_SAP_ODP_ODATA_URL='http://localhost:50000/sap/opu/odata/sap/Z_ODP_DL2_SRV/F
 
 `./bin/benchmark.py` measures replication throughput end to end — the connector
 as a subprocess, RECORD messages against wall-clock time — across the
-partitioning and threading matrix. Results in
-[docs/performance.md](performance.md).
+partitioning and threading matrix. Writes `docs/performance-raw.md`; the prose interpretation is
+[performance.md](performance.md), which is written by hand.
 
 ```bash
 ./bin/benchmark.py --list
-./bin/benchmark.py --repeat 3 --markdown ../docs/performance.md
+./bin/benchmark.py --repeat 3
 ```
 
 ## Building the image

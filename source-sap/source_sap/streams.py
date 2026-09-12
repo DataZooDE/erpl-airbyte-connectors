@@ -28,6 +28,26 @@ _HEARTBEAT_SECONDS = 60
 CDC_DELETED_AT = "_ab_cdc_deleted_at"
 
 
+def declare_cdc_column(json_schema: Mapping[str, Any], sap_object: SapObject) -> dict[str, Any]:
+    """Add the CDC tombstone to a delta-capable stream's schema.
+
+    Records carry it, so the schema has to as well: a typed destination is
+    entitled to drop a field the schema does not declare, and the tombstone is
+    the whole reason to choose ODP over a snapshot.
+    """
+    schema = dict(json_schema)
+    if not sap_object.change_mode_field:
+        return schema
+    properties = dict(schema.get("properties") or {})
+    properties[CDC_DELETED_AT] = {
+        "type": ["null", "string"],
+        "format": "date-time",
+        "description": "Set when SAP reported this row as deleted.",
+    }
+    schema["properties"] = properties
+    return schema
+
+
 class ErplPartition(Partition):
     """One read plan, executed on a thread-local DuckDB cursor."""
 
@@ -197,7 +217,7 @@ def build_stream(
             cursor=cursor,
         ),
         name=sap_object.name,
-        json_schema=dict(sap_object.json_schema),
+        json_schema=declare_cdc_column(sap_object.json_schema, sap_object),
         primary_key=_flatten_primary_key(sap_object.primary_key),
         cursor_field=None,
         logger=logger,

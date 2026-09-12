@@ -27,3 +27,16 @@ acted on, with the reason. Recorded so later rounds do not re-litigate them.
 | The resume predicate compared as a string while the cursor tracked the maximum numerically | Moot — withdrawn with the feature. It was real. |
 | The resume design rests on an unproven SAP row-ordering contract | Moot — withdrawn with the feature. The e2e test on `SCARR` was weak evidence for a system-wide guarantee. |
 | `docs/performance.md` cites figures the harness cannot produce, and quotes numbers that are arithmetically impossible against each other | **Rewritten.** The raw-DuckDB probes used different queries (`count(*)`, a `CAST` to VARCHAR) that were not measuring comparable work, which is how three successive explanations came out wrong. The document now contains only figures a benchmark case produces, and the explanation for why partitioning does not help is withdrawn rather than replaced — it is not established. |
+
+## Documentation review
+
+| Finding | Decision |
+|---|---|
+| `read_table_function` documented in two places but exists nowhere in the spec or the code | **Removed.** Invented while writing the page, and in the one document meant to be handed to a Basis team. The pages now say the capability exists in ERPL but the connector does not yet expose it. |
+| The documented SNC / plain-`http` warning was never emitted | **Fixed in code.** The hook, its `odp_odata` override and its unit tests all existed; nothing called it. Now called from `check_connection`, before the connection is attempted so it appears even when the check then fails. |
+| BICS incremental requires a `primary_key` the spec could not express | **Fixed in code.** The feature was unconfigurable from the Airbyte UI. Added to every protocol's object list, with a test. |
+| `fetch_size` described as rows; the code budgets bytes | **Fixed in code.** Every reader of the form would have sized it against their row count. |
+| `_ab_cdc_deleted_at` promised but not declared in the stream schema | **Fixed in code.** A typed destination may drop a field the schema does not declare, and the tombstone is the reason to choose ODP. Verified present in a real discovered schema. |
+| `reference.md` claimed to be generated and complete; it was neither | **Fixed both ways.** The claim is corrected, four supported-but-hidden fields (`return_parameter`, BICS `filters`/`variant`/`properties`, ODP `filters`) are now in the spec, and a test fails if the page and the spec disagree. |
+| `RODPS_REPL_ODP_RESET` described as called on stream reset | **Corrected.** The connector never calls it. It is listed in the authorization page as destructive and safely withheld, because it would otherwise appear unexplained in a trace. |
+| ERPL-side and SAP-side strings stated flatly, unverifiable from this repo | **Attributed.** The module lists now name ERPL v2026.09.04 as their source, and a test fails if a later version declares something the page omits. |

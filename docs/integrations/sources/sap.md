@@ -74,7 +74,7 @@ table fails the stream with the SAP message attached, rather than syncing zero r
 |---|---|
 | Full Refresh - Overwrite | Yes |
 | Full Refresh - Append | Yes |
-| Incremental - Append | Yes (RFC with a cursor field; both ODP protocols) |
+| Incremental - Append | Yes (RFC and function modules with a cursor field; BW with a watermark variable; both ODP protocols) |
 | Incremental - Append + Deduped | Yes |
 | Change Data Capture | Yes, for both ODP protocols |
 | Namespaces | No |
@@ -86,6 +86,11 @@ on the next run).
 **RFC** syncs incrementally when you nominate a **Cursor Field** — a date or
 timestamp column. The connector keeps the highest value it has seen and pushes a
 `>=` predicate down to SAP on the next run.
+
+**BW queries** sync incrementally through a BEx variable used as a watermark:
+set **Cursor Variable**, **Cursor Field** and a **Primary Key**. The selection is
+`>=`, so the boundary period is re-read each run and the key is what lets the
+destination deduplicate it.
 
 **ODP** syncs incrementally through SAP's own delta mechanism. The first
 incremental run performs SAP's DELTAINIT: it returns the whole current snapshot

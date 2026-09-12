@@ -60,16 +60,24 @@ it there — see [performance](performance.md).
 
 ## Monitoring a sync
 
-The connector emits a progress line every 60 seconds during a long read. Those
-are protocol LOG messages, so they also keep the platform's
-`maxSecondsBetweenMessages` budget (set to 7200 here, because ODP initial loads
-can spend a long time preparing before the first row).
+Once rows are flowing, the connector emits a progress line every 60 seconds.
+Those are protocol LOG messages, so they also keep the platform's
+`maxSecondsBetweenMessages` budget alive.
+
+Before the first row there is nothing to report, and an ODP initial load can
+spend a long time in SAP preparing the extraction. That is why the budget is set
+to 7200 seconds — a silent two hours at the start of a delta is expected, not a
+hang.
 
 ## Credentials
 
-Every credential field is marked `airbyte_secret`, so the platform redacts it
-from logs. The connector additionally passes credentials to SAP as bound
-parameters rather than interpolating them into any statement.
+The `password` field is marked `airbyte_secret`, so the platform redacts it from
+logs and stores it encrypted. The other logon fields — host, client, user — are
+not secret and appear in logs, which is deliberate: they are what you need to
+read a failure.
+
+Credentials reach SAP as bound parameters of a `CREATE SECRET` statement rather
+than being interpolated into any SQL text.
 
 Rotate the password on the SAP side and update the source; there is no cached
 copy anywhere else.
