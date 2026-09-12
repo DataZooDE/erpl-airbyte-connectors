@@ -2,58 +2,134 @@
   <img src="assets/erpl_airbyte_rfc_read_table_result.png" alt="ERPL Airbyte connector" width="640">
 </p>
 
-# ERPL Airbyte Connectors
+# source-sap — replicate SAP with Airbyte
 
-An Airbyte source for SAP, built on the [ERPL](https://erpl.io) DuckDB extensions.
+An Airbyte source that reads SAP through the [ERPL](https://erpl.io) DuckDB
+extensions. One connector, five ways into the system:
 
-One connector — [`source-sap`](./source-sap) — covers four SAP interfaces:
-
-| Protocol | ERPL extension | Reads |
+| You want | Protocol | What it reads |
 |---|---|---|
-| **RFC** | `erpl_rfc` | SAP tables and CDS views, with projection and filter pushdown |
-| **BICS** | `erpl_bics` | BW InfoProviders and BEx queries, including variable binding |
-| **ODP (RFC)** | `erpl_odp` | ODP providers across BW, ABAP_CDS, SAPI, SLT and HANA — full and delta |
-| **ODP (OData)** | `erpl_web` | The same ODP data over the SAP Gateway — full and delta |
+| A table or CDS view | **RFC** | Any transparent, pool or cluster table, with columns and filters pushed into SAP |
+| The result of a BAPI or function module | **RFC function modules** | Any remote-enabled module, called with your parameters |
+| A BW query or cube | **BICS** | InfoProviders and BEx queries, including variable binding |
+| Changes, not snapshots | **ODP (RFC)** | BW, ABAP_CDS, SAPI, SLT and HANA providers — full and delta |
+| Changes, over the Gateway | **ODP (OData)** | The same, over HTTP, where RFC is not available |
 
-Both ODP protocols sync incrementally through SAP's own delta mechanism, and emit
+Both ODP protocols sync incrementally through SAP's own delta mechanism and emit
 deletes as Airbyte CDC tombstones.
 
 ## Getting started
 
-See [source-sap/README.md](./source-sap/README.md) for development, and
-[docs/integrations/sources/sap.md](./docs/integrations/sources/sap.md) for the
-user-facing setup guide.
+Four steps. The third is where SAP systems differ from each other.
+
+### 1. See it run — no SAP needed
 
 ```bash
-cd source-sap
-uv sync
-uv run pytest unit_tests -q
-./bin/build-image.sh
+docker run --rm datazoo/source-sap:1.0.0 spec
 ```
 
-## Repository layout
+Prints the connector's configuration schema. If that works, the image is sound
+and everything from here is about SAP.
+
+### 2. Collect what you need
+
+Three things, and the second is the one people underestimate:
 
 ```
-source-sap/                         the connector
-  source_sap/protocols/             one driver per SAP interface
-  unit_tests/                       no SAP required
-  integration_tests/                Airbyte's standard connector tests
-  e2e/                              full connector runs against a real SAP system
-docs/integrations/sources/sap.md    user-facing documentation
+SAP logon        ashost + sysnr (or mshost + sysid + group), client, user, password
+Authorizations   S_RFC for the function groups your protocol uses  -> docs/authorizations.md
+What to read     a table name, a function module, a BW query, an ODP provider
 ```
 
-## Testing philosophy
+For **ODP over OData** you also need the Gateway base URL and an activated
+service. For a system behind a SAProuter, add the router string.
 
-The definition of done for every protocol is an **end-to-end test against a real
-SAP system, with nothing mocked** — the connector runs as a subprocess exactly as
-the Airbyte platform runs it, and the assertions are made on the protocol messages
-it writes to stdout. The reference system is the
-[ABAP Platform Trial](https://hub.docker.com/r/sapse/abap-platform-trial) container.
+### 3. Check the connection
+
+In Airbyte: **Sources → New source → SAP**, fill in the logon, pick a protocol,
+and run the test. Or from the command line:
+
+```bash
+docker run --rm --network host -v "$PWD/config.json:/config.json:ro" \
+    datazoo/source-sap:1.0.0 check --config /config.json
+```
+
+A failure here is almost always one of three things — the host, the client, or a
+missing `S_RFC` authorization. The message says which;
+[troubleshooting](docs/troubleshooting.md) covers the rest.
+
+### 4. Get your first table out
+
+```json
+{
+  "ashost": "sap.example.com", "sysnr": "00", "client": "100",
+  "user": "AIRBYTE", "password": "…", "lang": "EN",
+  "protocol": { "mode": "rfc", "table_pattern": "SFLIGHT" }
+}
+```
+
+Refresh the schema, select the stream, run the sync. Then make it fast: naming
+the columns you actually want is worth **3.8x** on a wide table
+([performance](docs/performance.md)).
+
+### 5. Keep it in sync
+
+Full refresh is the default. For genuine change data, use ODP — the first
+incremental run returns a snapshot and registers a subscription on SAP; later
+runs return only what changed, with deletes as tombstones. See
+[incremental sync](docs/incremental.md), and read the subscription-hygiene
+section before you delete a connection.
+
+## Install
+
+The image is `linux/amd64` only — ERPL publishes no arm64 build.
+
+```bash
+# in Airbyte: Settings -> Sources -> Add a new connector
+#   Docker repository:  datazoo/source-sap
+#   Docker image tag:   1.0.0
+```
+
+Building it yourself, or running the connector from a checkout, is in
+[development](docs/development.md).
+
+## Docs
+
+**Getting it working**
+
+- [`docs/authorizations.md`](docs/authorizations.md) — **what your Basis team will ask**: the exact function modules per protocol, the RFC user, SNC
+- [`docs/glossary.md`](docs/glossary.md) — the SAP words, if you do not use them daily
+- [`docs/troubleshooting.md`](docs/troubleshooting.md) — the errors you will actually see, and what each one means
+
+**Reading data**
+
+- [`docs/tables.md`](docs/tables.md) — tables and CDS views: patterns, projection, SAP-side filters
+- [`docs/function-modules.md`](docs/function-modules.md) — calling BAPIs and function modules, and why discovery never calls them
+- [`docs/bw-queries.md`](docs/bw-queries.md) — BW cubes and BEx queries, variables, and slicing a query that will not fit in memory
+
+**Keeping data in sync**
+
+- [`docs/incremental.md`](docs/incremental.md) — the three incremental mechanisms, how to choose, and **ODQ subscription hygiene**
+- [`docs/operations.md`](docs/operations.md) — running it in anger: failures, resets, what a stranded subscription looks like
+
+**How it behaves, and how fast**
+
+- [`docs/performance.md`](docs/performance.md) — measured numbers, dated, with the tool that produced each one
+- [`docs/reference.md`](docs/reference.md) — every configuration field, in one place
+
+**Working on the connector**
+
+- [`docs/development.md`](docs/development.md) — building, testing against a real SAP system, the no-mock policy
+- [`docs/registry-submission.md`](docs/registry-submission.md) — the Airbyte registry position, and why the licence check fails
+- [`docs/review-decisions.md`](docs/review-decisions.md) — review findings deliberately not acted on, with reasons
+
+The user-facing page Airbyte itself renders is
+[`docs/integrations/sources/sap.md`](docs/integrations/sources/sap.md).
 
 ## Licence
 
-Business Source License 1.1 (see [LICENSE](./LICENSE)), the same licence as the
-ERPL extensions this connector loads. You may use it in production, but not offer
-it to third parties on a hosted or embedded basis; the licence converts to MPL 2.0
-five years after publication. BICS and ODP replication are ERPL Enterprise Edition
-features. For commercial terms, see [erpl.io](https://erpl.io).
+Business Source License 1.1 — see [LICENSE](./LICENSE), the same licence as the
+ERPL extensions this connector embeds. You may use it in production, but not
+offer it to third parties on a hosted or embedded basis; the licence converts to
+MPL 2.0 five years after publication. BICS and ODP replication are ERPL
+Enterprise Edition features. For commercial terms, see [erpl.io](https://erpl.io).
