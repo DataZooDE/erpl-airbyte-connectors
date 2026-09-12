@@ -133,13 +133,17 @@ class TestRead:
             catalog=_catalog("SFLIGHT", schema),
             tmp_path=tmp_path,
         )
-        assert errors(parallel) == []
+        assert errors(base) == [] and errors(parallel) == []
 
         # Partitioned scans return the same rows in an unspecified order.
         def key(rows):
             return sorted(tuple(sorted(r["data"].items())) for r in rows)
 
-        assert key(records(base, "SFLIGHT")) == key(records(parallel, "SFLIGHT"))
+        left, right = key(records(base, "SFLIGHT")), key(records(parallel, "SFLIGHT"))
+        # Guard first: two empty results compare equal, so without this the
+        # assertion below holds just as well when both reads return nothing.
+        assert len(left) > 0, "the serial read returned no SFLIGHT rows"
+        assert left == right
 
 
 class TestIncremental:

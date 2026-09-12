@@ -107,13 +107,20 @@ class TestLargeTable:
             return sorted(tuple(sorted(r["data"].items())) for r in records(messages, BENCH_TABLE))
 
         left, right = keyed(serial), keyed(parallel)
+        # Before comparing: two empty results are equal, so a regression that
+        # returned nothing at all -- a projection that drops the column, a
+        # max_rows fault, a stream-name change that makes records() match
+        # nothing -- would otherwise pass this test green.
+        assert len(left) >= MIN_BENCH_ROWS, f"the serial read returned only {len(left):,} rows"
         assert len(left) == len(right), f"serial {len(left):,} vs partitioned {len(right):,}"
         assert left == right
 
     def test_no_duplicate_rows_at_volume(self, sap_rfc_config, schema, tmp_path):
         config = _config(sap_rfc_config, BENCH_TABLE, partitions=8, columns=["TABNAME"])
         messages = run_connector("read", config=config, catalog=_catalog(BENCH_TABLE, schema), tmp_path=tmp_path)
+        assert errors(messages) == []
         names = [r["data"]["TABNAME"] for r in records(messages, BENCH_TABLE)]
+        assert len(names) >= MIN_BENCH_ROWS, f"only {len(names):,} rows; nothing was exercised"
         # TABNAME is the key of DD02L, so every value must appear exactly once.
         assert len(names) == len(set(names)), f"{len(names) - len(set(names)):,} duplicate rows in a partitioned scan"
 

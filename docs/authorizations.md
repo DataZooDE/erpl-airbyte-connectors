@@ -89,6 +89,11 @@ RSOBJS_GET_NODES                DDIF_FIELDINFO_GET
 RFC_READ_TABLE
 ```
 
+`BICS_PROV_CLOSE` is on the list because ERPL calls it, not the connector: every
+`sap_bics_*` statement opens a data area, sets the state, reads and closes again,
+so the close happens per statement — including when the statement raises. Without
+the grant, providers would be left open on the BW server until they time out.
+
 BW additionally checks its own analysis authorizations (`S_RS_COMP`,
 `S_RS_AUTH`) on the InfoProvider and its characteristics. Those are a BW
 question, not an RFC one, and are granted the same way they would be for a human

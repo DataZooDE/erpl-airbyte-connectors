@@ -20,6 +20,13 @@ The first incremental run performs SAP's **DELTAINIT**: it returns the whole
 current snapshot *and* registers a subscription. Every later run returns only
 what changed since, with deletes arriving as `_ab_cdc_deleted_at` tombstones.
 
+Tombstones need the provider to report deletes. ODP over RFC always does. Over
+the Gateway it depends on the service: an entity set that exposes no change-mode
+column (`ODQ_CHANGEMODE`) syncs new and changed rows but can never mark one
+deleted, so the destination keeps deleted rows indefinitely. Discovery warns
+when it finds such an entity set, and the stream's schema then has no
+`_ab_cdc_deleted_at` — which is the reliable way to tell.
+
 ```json
 {
   "protocol": {

@@ -16,7 +16,8 @@ extensions. One connector, five ways into the system:
 | Changes, over the Gateway | **ODP (OData)** | The same, over HTTP, where RFC is not available |
 
 Both ODP protocols sync incrementally through SAP's own delta mechanism and emit
-deletes as Airbyte CDC tombstones.
+deletes as Airbyte CDC tombstones, where the provider reports deletes at all —
+see [incremental](docs/incremental.md).
 
 ## Install
 

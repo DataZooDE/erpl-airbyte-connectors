@@ -44,7 +44,7 @@ Closing is not confirming, so a close never costs the next run its packets.
 |---|---|
 | RFC tables | nothing; the next run re-reads |
 | Function modules | nothing |
-| BICS | the BICS session is server-side and times out on its own |
+| BICS | nothing on the BW side. Each `sap_bics_*` statement is its own CREATE_DATA_AREA → OPEN → SET_STATE → **CLOSE** cycle inside ERPL, so a provider is closed when the statement ends, exception or not. What the connector calls a "BICS session" is state rows in its own scratch DuckDB file, discarded with it |
 | ODP | the subscription stays, the position does **not** advance, and the next run re-reads that delta. The delta cursor is closed on the way out; if the failure was mid-fetch SAP refuses the close, and the log says so |
 
 The connector deliberately does not checkpoint an ODP position for a stream that

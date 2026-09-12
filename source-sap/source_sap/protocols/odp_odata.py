@@ -118,6 +118,18 @@ class OdpODataDriver(ProtocolDriver):
             logger.warning("Skipping ODP OData entity set %s: it exposes no columns.", url)
             return None, None
         change_field = next((c for c in CHANGE_MODE_CANDIDATES if c in properties), None)
+        if change_field is None:
+            # Incremental still works -- new and changed rows arrive -- but a
+            # deleted row simply stops appearing, so the destination keeps it.
+            # Said once at discovery, where the choice of entity set is made.
+            logger.warning(
+                "%s exposes no change-mode column (%s), so this stream cannot report "
+                "deletes: an incremental sync will add and update rows but never mark "
+                "one deleted. Enable change tracking on the ODP service to get "
+                "tombstones.",
+                url,
+                "/".join(CHANGE_MODE_CANDIDATES),
+            )
         return schema, change_field
 
     def _resolve_url(self, url: str) -> str:
