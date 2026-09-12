@@ -1,4 +1,4 @@
-"""Fixes from crew round 2."""
+"""Fixes from crew round 3."""
 
 from unittest.mock import MagicMock
 
@@ -14,12 +14,14 @@ def _driver(**protocol):
     return RfcDriver({**CONN, "protocol": {"mode": "rfc", **protocol}})
 
 
-def _obj(resume_key="CARRID", **meta):
+def _obj(**meta):
+    # No resume_key: resumable full refresh was withdrawn in round 3, because a
+    # worker thread could emit its state ahead of the records it covered.
     return SapObject(
         name="T",
         json_schema={"type": "object", "properties": {}},
         primary_key=[["MANDT"], ["CARRID"]],
-        meta={"table": "T", "resume_key": resume_key, **meta},
+        meta={"table": "T", **meta},
     )
 
 
@@ -35,10 +37,11 @@ def _stream(driver, obj, incremental=False):
 
 
 class TestPartitionsAlwaysGovernTheSql:
-    """One number must drive the SQL, resumability and the resume predicate.
+    """One number must drive the SQL.
 
     With PARTITIONS omitted from the query, an absent setting meant one thing to
-    `is_resumable` and another to what SAP actually did.
+    the connector and another to what SAP actually did. It governed resumability
+    too, until resumable full refresh was withdrawn in this same round.
     """
 
     def test_the_partition_count_is_always_stated(self):

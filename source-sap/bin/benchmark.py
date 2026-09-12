@@ -262,7 +262,11 @@ def assert_quiet_system() -> None:
         readable = cmdline.replace("\0", " ").strip()
         if "benchmark.py" in readable:
             continue
-        if re.search(r"source_sap\.run|pytest (unit_tests|e2e|integration_tests)", readable):
+        # Deliberately broad. A false positive costs one --allow-busy; a false
+        # negative costs a table of numbers that look like throughput and are
+        # contention, which is how this check came to exist. An earlier edit
+        # narrowed it to two pytest paths and missed ./bin/test-e2e.sh.
+        if re.search(r"source_sap|pytest|test-e2e|trace-round-trips|airbyte", readable):
             busy.append(f"  pid {proc_dir.name}: {readable[:100]}")
     if busy:
         sys.exit(

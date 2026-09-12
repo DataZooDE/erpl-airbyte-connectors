@@ -58,6 +58,35 @@ to lower. It is clamped to 32.
 Within one stream, `partitions` is off by default and the measurements say leave
 it there — see [performance](performance.md).
 
+## Sizing the connector container
+
+Two settings multiply into the memory the sync needs, so they are worth reading
+together before raising either:
+
+| | Bound |
+|---|---|
+| `fetch_size` | 64 MiB per SAP round trip, the hard maximum |
+| `concurrency` | 32 streams read at once, the hard maximum |
+| in the worst case | one in-flight buffer per concurrent stream |
+
+At both maxima that is **2 GiB of in-flight row buffers**, before DuckDB's own
+working set and the CDK's serialization. Nothing reaches that by default:
+`fetch_size` unset means erpl's own 1.25 MiB budget, and `concurrency` defaults
+to a handful.
+
+The combination that gets there by accident is a raised `fetch_size` alongside
+`partitions`, because the connector multiplies the budget by the partition count
+(that is what stops each worker starving). An explicit `fetch_size` is *not*
+multiplied — it is taken as the number you meant — so if you set both, set
+`fetch_size` to the total you can afford, not to the per-worker figure. The
+connector warns when an explicit budget divided by the partition count leaves a
+worker under 512 KB.
+
+A connector container with 2 GiB is comfortable for the defaults. If you raise
+`fetch_size` or `concurrency`, raise the container's memory limit in step, or
+the sync is killed by the platform rather than failing with a message you can
+read.
+
 ## Monitoring a sync
 
 Once rows are flowing, the connector emits a progress line every 60 seconds.

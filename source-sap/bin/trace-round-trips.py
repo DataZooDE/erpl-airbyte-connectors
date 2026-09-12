@@ -75,20 +75,26 @@ cases = [
     ("8 partitions, 8x fetch_size", 8, DEFAULT_FETCH * 8),
     ("8 partitions, 32x fetch_size", 8, DEFAULT_FETCH * 32),
 ]
-for label, partitions, fetch_size in cases:
-    con = connect()
-    args = ["'DD02L'", f"PARTITIONS := {partitions}"]
-    if fetch_size:
-        args.append(f"FETCH_SIZE := {fetch_size}")
-    sql = f"SELECT sum(length(CAST(t AS VARCHAR))) FROM (SELECT * FROM sap_read_table({', '.join(args)})) t"
-    start = time.perf_counter()
-    try:
-        con.execute(sql).fetchone()
-        elapsed = time.perf_counter() - start
-        con.close()
+try:
+    for label, partitions, fetch_size in cases:
+        args = ["'DD02L'", f"PARTITIONS := {partitions}"]
+        if fetch_size:
+            args.append(f"FETCH_SIZE := {fetch_size}")
+        sql = f"SELECT sum(length(CAST(t AS VARCHAR))) FROM (SELECT * FROM sap_read_table({', '.join(args)})) t"
+        con = connect()
+        start = time.perf_counter()
+        try:
+            con.execute(sql).fetchone()
+            elapsed = time.perf_counter() - start
+        except Exception as exc:
+            print(f"{label:<38}  FAILED: {str(exc)[:50]}")
+            continue
+        finally:
+            # The trace is only complete once the connection is closed, and an
+            # interrupt here would otherwise leave an open SAP session behind.
+            con.close()
         calls = round_trips()
         print(f"{label:<38}{elapsed:>8.1f}s{ROWS / elapsed:>11,.0f}{calls:>11,}{ROWS / calls if calls else 0:>11,.0f}")
-    except Exception as exc:
-        con.close()
-        print(f"{label:<38}  FAILED: {str(exc)[:50]}")
-shutil.rmtree(TRACE_DIR, ignore_errors=True)
+finally:
+    # Traces are large and the directory is scratch, so it goes whatever happened.
+    shutil.rmtree(TRACE_DIR, ignore_errors=True)

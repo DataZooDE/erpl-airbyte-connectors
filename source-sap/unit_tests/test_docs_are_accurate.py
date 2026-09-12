@@ -149,7 +149,14 @@ class TestInternalLinksResolve:
     def test_no_documentation_link_is_broken(self):
         root = DOCS.parent
         broken = []
-        for md in list(root.glob("*.md")) + list(root.glob("docs/**/*.md")):
+        # Every tracked page, not just docs/: source-sap/README.md and the
+        # connector's own docs/integrations page link across the tree too, and a
+        # checker that skips them is a checker that says "no broken links" about
+        # the files nobody checked.
+        pages = list(root.glob("*.md")) + list(root.glob("docs/**/*.md")) + list(root.glob("source-sap/**/*.md"))
+        for md in pages:
+            if any(part in {".venv", "node_modules", ".crew", ".erpl", ".pytest_cache"} for part in md.parts):
+                continue
             for label, target in re.findall(r"\[([^\]]+)\]\(([^)]+)\)", md.read_text()):
                 if target.startswith(("http", "#", "mailto:")):
                     continue

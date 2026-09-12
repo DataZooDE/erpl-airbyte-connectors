@@ -42,6 +42,12 @@ MIN_BUDGET_PER_WORKER = 512 * 1024
 #: bounded worker count, stays within a connector container's means.
 MAX_FETCH_SIZE = 64 * 1024 * 1024
 
+#: Longest cursor value accepted back from state. SAP takes a WHERE fragment as
+#: 72-character lines, so a multi-kilobyte value dumps or truncates inside SAP
+#: rather than failing here. Real checkpoints are short -- a DATS value is 8
+#: characters -- so this is generous for anything legitimate.
+MAX_CURSOR_VALUE = 255
+
 
 def sap_cursor_literal(value: Any, sap_type: str | None) -> str:
     """Render a state value as the ABAP literal SAP expects.
@@ -206,6 +212,12 @@ class RfcDriver(ProtocolDriver):
             since = state.get(str(cursor_field))
             if since not in (None, ""):
                 literal = sap_cursor_literal(since, obj.meta.get("cursor_sap_type"))
+                if len(literal) > MAX_CURSOR_VALUE:
+                    raise ValueError(
+                        f"The state value for {cursor_field} is {len(literal)} characters, "
+                        f"over the {MAX_CURSOR_VALUE} this connector will send to SAP. "
+                        "Reset the stream's state."
+                    )
                 # SAP's WHERE fragment uses ABAP literal quoting, and the whole
                 # fragment is then a DuckDB string literal -- hence two levels.
                 predicates.append(f"{cursor_field} >= {_sql_literal(literal)}")

@@ -314,8 +314,11 @@ class BicsDriver(ProtocolDriver):
             return [
                 ReadPlan(
                     sql=statements[-1],
-                    slice_={"session_id": obj.meta["session_id"]},
-                    meta={"setup": statements[:-1]},
+                    # The cube and query name the partition for anyone reading a
+                    # log; the session id is a handle only this driver can use,
+                    # so it travels in meta with the statements that set it up.
+                    slice_={"cube": str(obj.meta["cube"]), "query": str(obj.meta.get("query") or obj.name)},
+                    meta={"setup": statements[:-1], "session_id": obj.meta["session_id"]},
                 )
             ]
 
@@ -334,11 +337,12 @@ class BicsDriver(ProtocolDriver):
                 ReadPlan(
                     sql=statements[-1],
                     slice_={
-                        "session_id": sliced.meta["session_id"],
+                        "cube": str(obj.meta["cube"]),
+                        "query": str(obj.meta.get("query") or obj.name),
                         "characteristic": characteristic,
                         "member": member,
                     },
-                    meta={"setup": statements[:-1]},
+                    meta={"setup": statements[:-1], "session_id": sliced.meta["session_id"]},
                 )
             )
         return plans

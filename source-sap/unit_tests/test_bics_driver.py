@@ -112,7 +112,7 @@ class TestSlicing:
             ]
         )
         plans = d.read_plans(None, self._obj(), incremental=False, state={})
-        ids = {p.slice_["session_id"] for p in plans}
+        ids = {p.meta["session_id"] for p in plans}
         assert len(ids) == 2
 
 
@@ -136,7 +136,7 @@ class TestSessionIdUniqueness:
         from source_sap.protocols.base import SapObject
 
         obj = SapObject(name=long_name, json_schema={}, meta={"cube": "C", "query": None, "session_id": "x"})
-        ids = {p.slice_["session_id"] for p in d.read_plans(None, obj, incremental=False, state={})}
+        ids = {p.meta["session_id"] for p in d.read_plans(None, obj, incremental=False, state={})}
         assert len(ids) == 3
 
     def test_session_ids_stay_within_the_sap_field(self):
