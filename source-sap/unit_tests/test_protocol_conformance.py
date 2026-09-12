@@ -75,7 +75,6 @@ class TestCatalogShape:
         assert SyncMode.incremental in stream.supported_sync_modes
         assert stream.source_defined_cursor is True
         assert stream.default_cursor_field in (None, [])
-        assert stream.is_resumable is True
 
     def test_the_primary_key_survives_as_airbyte_stream(self):
         stream = _stream(False, primary_key=[["A"], ["B"]]).as_airbyte_stream()

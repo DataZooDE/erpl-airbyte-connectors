@@ -230,6 +230,12 @@ def _run_and_watch_rss(args: list[str]) -> tuple[subprocess.CompletedProcess, fl
     watcher.start()
     try:
         stdout, stderr = process.communicate(timeout=3600)
+    except subprocess.TimeoutExpired:
+        # Left running, it would compete with every later case for the same SAP
+        # system and quietly poison the rest of the matrix.
+        process.kill()
+        stdout, stderr = process.communicate()
+        raise
     finally:
         stop.set()
         watcher.join(timeout=1)
@@ -300,7 +306,7 @@ def measure(case: Case, repeat: int, workdir: Path) -> Result:
     return result
 
 
-def render_markdown(results: list[Result], repeat: int) -> str:
+def render_markdown(results: list[Result], repeat: int, failures: list[tuple[Case, str]] | None = None) -> str:
     import platform
 
     lines = [
@@ -342,6 +348,19 @@ def render_markdown(results: list[Result], repeat: int) -> str:
                 lines.append(
                     f"| {label} | {r.rows_per_second:,.0f} | {r.rows_per_second / baseline.rows_per_second:.2f}x |"
                 )
+    if failures:
+        lines += [
+            "",
+            "## Cases that failed",
+            "",
+            "These produced no measurement. The table above is therefore not a",
+            "complete picture of this run.",
+            "",
+            "| Case | Error |",
+            "|---|---|",
+        ]
+        lines += [f"| {case.title} | {error} |" for case, error in failures]
+
     notes = [f"- **{r.case.title}** — {r.case.note}" for r in results if r.case.note]
     if notes:
         lines += ["", "## Notes", ""] + notes
@@ -393,17 +412,21 @@ def main() -> int:
     workdir = Path(os.environ.get("TMPDIR", "/tmp")) / "source-sap-bench"
     workdir.mkdir(parents=True, exist_ok=True)
 
-    results = []
+    results: list[Result] = []
+    failures: list[tuple[Case, str]] = []
     for case in cases:
         print(f"  {case.key}: {case.title}", flush=True)
         try:
             results.append(measure(case, args.repeat, workdir))
         except Exception as exc:  # one bad case must not lose the rest
             print(f"    FAILED: {exc}", flush=True)
+            # Recorded, not dropped: a report that silently omits what failed
+            # reads as a complete picture of a run that was not.
+            failures.append((case, str(exc).splitlines()[0] if str(exc) else repr(exc)))
 
     if not results:
         return 1
-    report = render_markdown(results, args.repeat)
+    report = render_markdown(results, args.repeat, failures)
     print("\n" + report)
     if args.markdown:
         args.markdown.parent.mkdir(parents=True, exist_ok=True)

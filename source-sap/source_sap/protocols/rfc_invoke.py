@@ -94,6 +94,17 @@ RETURN_NAMES = ("RETURN", "E_RETURN", "ET_RETURN", "EX_RETURN", "T_RETURN", "RET
 RETURN_SHAPE_FIELDS = frozenset({"TYPE", "MESSAGE", "ID", "NUMBER"})
 
 
+def _message_field(message: Mapping[str, Any], field: str) -> Any:
+    """Read a BAPIRET field however the source spelled its key."""
+    if field in message:
+        return message[field]
+    wanted = field.upper()
+    for key, value in message.items():
+        if str(key).upper() == wanted:
+            return value
+    return None
+
+
 def _as_messages(return_table: Any) -> list[Mapping[str, Any]]:
     """Normalise a RETURN parameter to a list of messages.
 
@@ -112,12 +123,18 @@ def _as_messages(return_table: Any) -> list[Mapping[str, Any]]:
 
 
 def find_return_field(columns: Sequence[str], configured: str | None = None) -> str | None:
-    """Which result column holds the BAPI return table."""
+    """Which result column holds the BAPI return table.
+
+    Matched case-insensitively: SAP spells its parameters in upper case, but the
+    cost of being wrong here is that a failed call reads as an empty stream, so
+    the match is deliberately generous.
+    """
+    by_upper = {str(c).upper(): c for c in columns}
     if configured:
-        return configured if configured in columns else None
+        return by_upper.get(str(configured).upper())
     for name in RETURN_NAMES:
-        if name in columns:
-            return name
+        if name in by_upper:
+            return by_upper[name]
     return None
 
 
@@ -152,7 +169,7 @@ def _struct_field_names(duckdb_type: str) -> list[str]:
 def is_bapi_failure(return_table: Any) -> bool:
     """True when a BAPI return table carries an error or abort message."""
     for message in _as_messages(return_table):
-        kind = str(message.get("TYPE") or "").strip().upper()
+        kind = str(_message_field(message, "TYPE") or "").strip().upper()
         if kind in FAILURE_TYPES:
             return True
     return False

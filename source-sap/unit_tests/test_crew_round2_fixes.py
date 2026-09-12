@@ -10,7 +10,7 @@ import pytest
 from airbyte_cdk.sources.connector_state_manager import ConnectorStateManager
 from airbyte_cdk.sources.message import InMemoryMessageRepository
 
-from source_sap.cursors import FieldValueCursor, ResumeKeyCursor
+from source_sap.cursors import FieldValueCursor
 from source_sap.protocols.base import ReadPlan, SapObject
 from source_sap.protocols.odp_rfc import OdpRfcDriver
 from source_sap.protocols.rfc_invoke import RfcInvokeDriver, is_bapi_failure
@@ -30,47 +30,6 @@ def _record(data):
 
 def _states(repo):
     return [m.state.stream.stream_state.__dict__ for m in repo.consume_queue()]
-
-
-class TestResumePointSurvivesTheCrashItExistsFor:
-    """F1: the resume point was only ever written *after* success, then cleared.
-
-    A crash mid-read left nothing to resume from, which is the only moment the
-    feature is for.
-    """
-
-    def _cursor(self, initial=None):
-        repo, mgr = _plumbing()
-        return ResumeKeyCursor("T", None, repo, mgr, "K", initial or {}), repo
-
-    def test_a_checkpoint_is_written_during_the_read(self):
-        cursor, repo = self._cursor()
-        for value in ["A", "B", "C"]:
-            cursor.observe(_record({"K": value}))
-        cursor.checkpoint()
-        assert _states(repo) == [{"__resume_key": "C"}]
-
-    def test_a_failed_read_keeps_the_resume_point(self):
-        cursor, repo = self._cursor()
-        cursor.observe(_record({"K": "A"}))
-        cursor.mark_failed()
-        cursor.ensure_at_least_one_state_emitted()
-        # Nothing may clear it: the next run has to continue from "A".
-        assert _states(repo) in ([], [{"__resume_key": "A"}])
-        assert cursor.state.get("__resume_key") == "A"
-
-    def test_a_completed_read_clears_the_resume_point(self):
-        cursor, repo = self._cursor()
-        cursor.observe(_record({"K": "A"}))
-        cursor.ensure_at_least_one_state_emitted()
-        assert _states(repo)[-1].get("__resume_key") in (None, "")
-
-    def test_numeric_keys_compare_numerically(self):
-        # F5: "9" > "10" lexicographically would skip every key from 10 up.
-        cursor, _ = self._cursor()
-        for value in [9, 10, 3]:
-            cursor.observe(_record({"K": value}))
-        assert cursor.state["__resume_key"] == 10
 
 
 class TestIncrementalDoesNotCheckpointMidStream:
@@ -226,43 +185,3 @@ class TestParameterNamesAreCanonicalised:
         driver = self._driver()
         with pytest.raises(Exception, match="CURSOR_TYPO"):
             driver.validate_parameters("F", {"CURSOR_TYPO": None}, self.DESCRIBE)
-
-
-class TestTheReadWritesResumePointsAsItGoes:
-    def test_a_long_read_checkpoints_before_it_finishes(self):
-        """F1's core: waiting for close_partition means the resume point only
-        ever exists once the sync no longer needs it."""
-        from source_sap.protocols.rfc import RfcDriver
-        from source_sap.streams import _CHECKPOINT_RECORDS, ErplPartition
-
-        repo, mgr = _plumbing()
-        cursor = ResumeKeyCursor("T", None, repo, mgr, "K", {})
-        rows = [(f"{i:08d}",) for i in range(_CHECKPOINT_RECORDS + 10)]
-        session = MagicMock()
-        result = session.cursor.return_value.execute.return_value
-        result.description = [("K", "VARCHAR")]
-        result.fetchmany.side_effect = [rows, []]
-        driver = RfcDriver({**CONN, "protocol": {"mode": "rfc"}})
-
-        partition = ErplPartition("T", session, ReadPlan(sql="x"), None, cursor=cursor, driver=driver)
-        # The CDK's PartitionReader calls observe() on each record as it drains
-        # the generator, so the test drives it the same way.
-        emitted = 0
-        for record in partition.read():
-            cursor.observe(record)
-            emitted += 1
-        assert emitted == len(rows)
-        # A checkpoint landed mid-read, not only once the stream was over.
-        assert _states(repo) == [{"__resume_key": f"{_CHECKPOINT_RECORDS - 1:08d}"}]
-
-    def test_a_cursor_without_checkpoint_is_tolerated(self):
-        from source_sap.protocols.rfc import RfcDriver
-        from source_sap.streams import ErplPartition
-
-        session = MagicMock()
-        result = session.cursor.return_value.execute.return_value
-        result.description = [("K", "VARCHAR")]
-        result.fetchmany.side_effect = [[("a",)], []]
-        driver = RfcDriver({**CONN, "protocol": {"mode": "rfc"}})
-        partition = ErplPartition("T", session, ReadPlan(sql="x"), None, cursor=MagicMock(spec=[]), driver=driver)
-        assert len(list(partition.read())) == 1

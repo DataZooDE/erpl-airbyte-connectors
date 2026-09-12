@@ -25,12 +25,7 @@ from airbyte_cdk.sources.streams.concurrent.adapters import StreamFacade
 from airbyte_cdk.sources.utils.slice_logger import DebugSliceLogger
 from airbyte_cdk.utils.traced_exception import AirbyteTracedException
 
-from source_sap.cursors import (
-    DriverStateCursor,
-    FieldValueCursor,
-    NoStateCursor,
-    ResumeKeyCursor,
-)
+from source_sap.cursors import DriverStateCursor, FieldValueCursor, NoStateCursor
 from source_sap.errors import config_error
 from source_sap.protocols.base import ProtocolDriver, SapObject
 from source_sap.protocols.bics import BicsDriver, is_grand_total_row
@@ -219,18 +214,6 @@ class SourceSap(ConcurrentSourceAdapter):
         state_manager: ConnectorStateManager,
     ):
         if not incremental:
-            # A full refresh that can pick up where it left off avoids re-reading
-            # a six-figure table from the top after a mid-sync failure.
-            key_field = driver.resume_key_field(obj)
-            if key_field and driver.is_resumable(obj):
-                return ResumeKeyCursor(
-                    obj.name,
-                    None,
-                    self._message_repository,
-                    state_manager,
-                    key_field,
-                    stream_state,
-                )
             return NoStateCursor(obj.name, None, self._message_repository, state_manager)
         cursor_field = obj.meta.get("cursor_field")
         if cursor_field:

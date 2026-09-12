@@ -24,10 +24,6 @@ logger = logging.getLogger("airbyte")
 # maxSecondsBetweenMessages budget is not hit during a slow SAP fetch.
 _HEARTBEAT_SECONDS = 60
 
-# How often a resumable stream writes its resume point. Waiting for the partition
-# to close would mean the point only ever exists once the sync has finished,
-# which is the one moment it is of no use.
-_CHECKPOINT_RECORDS = 50_000
 
 CDC_DELETED_AT = "_ab_cdc_deleted_at"
 
@@ -75,8 +71,6 @@ class ErplPartition(Partition):
                     self._apply_change_mode(data)
                 yield Record(data=data, stream_name=self._stream_name)
                 emitted += 1
-                if emitted % _CHECKPOINT_RECORDS == 0 and self._cursor is not None:
-                    self._cursor.checkpoint()
                 now = time.monotonic()
                 if now - last_beat >= _HEARTBEAT_SECONDS:
                     # A LOG message is a protocol message, so this also keeps the
@@ -169,23 +163,16 @@ class SapStream(DefaultStream):
         self,
         *args: Any,
         supports_incremental: bool = False,
-        resumable: bool = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         self._supports_incremental = supports_incremental
-        self._resumable = resumable
 
     def as_airbyte_stream(self) -> AirbyteStream:
         stream = super().as_airbyte_stream()
         if self._supports_incremental and SyncMode.incremental not in stream.supported_sync_modes:
             stream.supported_sync_modes.append(SyncMode.incremental)
             stream.source_defined_cursor = True
-            stream.is_resumable = True
-        elif self._resumable:
-            # Resumable full refresh: without this the platform does not keep the
-            # stream's state between attempts, and the resume point never returns.
-            stream.is_resumable = True
         return stream
 
 
@@ -218,7 +205,6 @@ def build_stream(
         cursor=cursor,
         namespace=namespace,
         supports_incremental=sap_object.supports_incremental,
-        resumable=driver.is_resumable(sap_object),
     )
 
 

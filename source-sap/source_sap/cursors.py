@@ -65,10 +65,6 @@ class _BaseCursor(Cursor):
         """Called when the stream did not finish. Cursors that persist a
         position override this to suppress their checkpoint."""
 
-    def checkpoint(self) -> None:
-        """Called periodically during a read. Only a cursor that can safely
-        resume mid-stream does anything here."""
-
     def _emit(self, state: Mapping[str, Any]) -> None:
         self._state_manager.update_state_for_stream(self._stream_name, self._namespace, dict(state))
         self._message_repository.emit_message(
@@ -190,80 +186,6 @@ class DriverStateCursor(_BaseCursor):
             logger.warning("Post-read cleanup for %s failed.", self._stream_name, exc_info=True)
         self._state = dict(self._driver.next_state(self._session, self._object, self._state))
         self._emit(self._state)
-
-
-class ResumeKeyCursor(_BaseCursor):
-    """Resume point for a full refresh, tracked on the stream's primary key.
-
-    A full refresh of a six-figure table that dies halfway would otherwise start
-    over. An unpartitioned `sap_read_table` returns rows ordered by the primary
-    key, so the highest key emitted is a safe place to continue from.
-
-    The point is cleared when the stream completes: a *finished* full refresh
-    must start from the beginning next time, not from where it happened to end.
-    """
-
-    RESUME_FIELD = "__resume_key"
-
-    def __init__(
-        self,
-        stream_name: str,
-        namespace: str | None,
-        message_repository: MessageRepository,
-        state_manager: ConnectorStateManager,
-        key_field: str,
-        initial_state: Mapping[str, Any],
-    ) -> None:
-        super().__init__(stream_name, namespace, message_repository, state_manager)
-        self._field = key_field
-        self._value: Any = (initial_state or {}).get(self.RESUME_FIELD)
-        self._failed = False
-
-    @property
-    def state(self) -> dict[str, Any]:
-        return {self.RESUME_FIELD: self._value} if self._value is not None else {}
-
-    def observe(self, record: Record) -> None:
-        value = (record.data or {}).get(self._field)
-        if value is None:
-            return
-        with self._lock:
-            if self._value is None or self._sort_key(value) > self._sort_key(self._value):
-                self._value = value
-
-    def checkpoint(self) -> None:
-        """Write the resume point mid-read.
-
-        This is the whole feature: `close_partition` fires only after the entire
-        table has been read, because a resumable stream is single-partition by
-        construction, so waiting for it would mean the resume point only ever
-        exists after the sync no longer needs it.
-        """
-        with self._lock:
-            if self._value is None:
-                return
-        self._emit(self.state)
-
-    def mark_failed(self) -> None:
-        """A crash must keep the resume point -- surviving it is the point."""
-        with self._lock:
-            self._failed = True
-
-    def close_partition(self, partition: Partition) -> None:
-        self.checkpoint()
-
-    def ensure_at_least_one_state_emitted(self) -> None:
-        with self._lock:
-            if self._failed:
-                logger.info(
-                    "Keeping the resume point for %s at %r: the stream did not finish.",
-                    self._stream_name,
-                    self._value,
-                )
-                return
-            self._value = None
-        # A *finished* full refresh starts from the top next time.
-        self._emit({self.RESUME_FIELD: None})
 
 
 class NoStateCursor(_BaseCursor):

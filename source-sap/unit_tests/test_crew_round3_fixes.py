@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock
 
-from airbyte_cdk.models import SyncMode
+import pytest
 
 from source_sap.protocols.base import SapObject
 from source_sap.protocols.rfc import RfcDriver
@@ -34,30 +34,6 @@ def _stream(driver, obj, incremental=False):
     return build_stream(MagicMock(), driver, obj, cursor, incremental=incremental, state={})
 
 
-class TestResumableStreamsSaySo:
-    """A full-refresh stream that does not advertise is_resumable never gets its
-    state back from the platform, so the resume machinery would never fire."""
-
-    def test_a_resumable_full_refresh_stream_advertises_it(self):
-        stream = _stream(_driver(), _obj()).as_airbyte_stream()
-        assert stream.is_resumable is True
-        assert stream.supported_sync_modes == [SyncMode.full_refresh]
-
-    def test_a_partitioned_stream_does_not(self):
-        # Partitioned reads are unordered, so there is no safe resume point.
-        driver = _driver(objects=[{"name": "T", "partitions": 8}])
-        assert _stream(driver, _obj()).as_airbyte_stream().is_resumable is not True
-
-    def test_a_stream_without_a_usable_key_does_not(self):
-        assert _stream(_driver(), _obj(resume_key=None)).as_airbyte_stream().is_resumable is not True
-
-    def test_an_incremental_stream_still_advertises_it(self):
-        obj = SapObject(name="T", json_schema={}, supports_incremental=True, meta={"table": "T"})
-        stream = _stream(_driver(), obj, incremental=True).as_airbyte_stream()
-        assert SyncMode.incremental in stream.supported_sync_modes
-        assert stream.is_resumable is True
-
-
 class TestPartitionsAlwaysGovernTheSql:
     """One number must drive the SQL, resumability and the resume predicate.
 
@@ -73,13 +49,6 @@ class TestPartitionsAlwaysGovernTheSql:
         driver = _driver(objects=[{"name": "T", "partitions": 4}])
         sql = driver.read_plans(None, _obj(), incremental=False, state={})[0].sql
         assert "PARTITIONS := 4" in sql
-
-    def test_the_sql_and_resumability_agree(self):
-        for partitions, resumable in ((0, True), (4, False)):
-            driver = _driver(objects=[{"name": "T", "partitions": partitions}])
-            sql = driver.read_plans(None, _obj(), incremental=False, state={})[0].sql
-            assert f"PARTITIONS := {partitions}" in sql
-            assert driver.is_resumable(_obj()) is resumable
 
 
 class TestOdpProbeIsNotGatedByTheSkipSetting:
@@ -119,3 +88,39 @@ class TestOdpProbeIsNotGatedByTheSkipSetting:
         state = driver.next_state(session, obj, {"subscriber_process": "AB_X"})
         # The value recorded is the one from before the read, not a later one.
         assert state["last_modified"] == "20260101120000.0"
+
+
+class TestReturnGuardIsCaseInsensitive:
+    """F6: SAP spells parameter names in upper case, but a Z-module or a
+    lower-cased metadata source would slip past an exact-case match, and the
+    guard fails open -- an unrecognised return table means a failed call reads
+    as an empty stream."""
+
+    def _read(self, columns, values, **slice_):
+        from source_sap.protocols.base import ReadPlan
+        from source_sap.protocols.rfc_invoke import RfcInvokeDriver
+
+        cursor = MagicMock()
+        result = cursor.execute.return_value
+        result.description = [(c, "x") for c in columns]
+        result.fetchone.return_value = values
+        driver = RfcInvokeDriver(
+            {**CONN, "protocol": {"mode": "rfc_invoke", "objects": [{"name": "x", "function": "F"}]}}
+        )
+        plan = ReadPlan(sql="x", slice_={"function": "F", "path_field": "T", **slice_})
+        return list(driver.records_from(plan, cursor))
+
+    @pytest.mark.parametrize("name", ["return", "Return", "e_return", "Et_Return"])
+    def test_a_lower_case_return_table_is_still_inspected(self, name):
+        with pytest.raises(Exception, match="broke"):
+            self._read(["T", name], ([{"A": 1}], [{"TYPE": "E", "MESSAGE": "broke"}]))
+
+    def test_a_lower_case_type_field_is_still_read(self):
+        from source_sap.protocols.rfc_invoke import is_bapi_failure
+
+        assert is_bapi_failure([{"type": "E", "message": "broke"}])
+
+    def test_a_lower_case_error_marker_is_caught(self):
+        from source_sap.protocols.rfc_invoke import is_bapi_failure
+
+        assert is_bapi_failure([{"TYPE": "e"}])

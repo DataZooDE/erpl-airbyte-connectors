@@ -128,14 +128,6 @@ class ProtocolDriver(ABC):
         """State to checkpoint after a successful incremental read."""
         return dict(previous)
 
-    def is_resumable(self, obj: SapObject) -> bool:
-        """Whether an interrupted full refresh of this stream can be resumed."""
-        return False
-
-    def resume_key_field(self, obj: SapObject) -> str | None:
-        """Record field holding the resume point, when the stream is resumable."""
-        return None
-
     def _object_overrides(self) -> dict[str, Mapping[str, Any]]:
         """Per-object overrides from the config, keyed by object name."""
         overrides: dict[str, Mapping[str, Any]] = {}

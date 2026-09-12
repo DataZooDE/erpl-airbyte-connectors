@@ -58,29 +58,6 @@ class TestSapTypeStringsAreValidated:
         con.close()
 
 
-class TestResumeKeyIsValidated:
-    """F14: resume_key is interpolated bare into the ABAP WHERE fragment."""
-
-    def _driver(self):
-        from source_sap.protocols.rfc import RfcDriver
-
-        return RfcDriver({**CONN, "protocol": {"mode": "rfc", "objects": [{"name": "T"}]}})
-
-    def test_a_normal_field_name_is_kept(self):
-        from source_sap.protocols.base import SapObject
-
-        obj = SapObject(name="T", json_schema={}, meta={"table": "T", "resume_key": "CARRID"})
-        sql = self._driver().read_plans(None, obj, incremental=False, state={"__resume_key": "LH"})[0].sql
-        assert "CARRID > ''LH''" in sql
-
-    def test_a_field_name_that_is_not_a_field_name_is_ignored(self):
-        from source_sap.protocols.base import SapObject
-
-        obj = SapObject(name="T", json_schema={}, meta={"table": "T", "resume_key": "X OR 1=1"})
-        sql = self._driver().read_plans(None, obj, incremental=False, state={"__resume_key": "LH"})[0].sql
-        assert "OR 1=1" not in sql
-
-
 class TestBicsIncrementalNeedsAKey:
     """F11: without a primary key the platform cannot dedupe the GE boundary.
 
