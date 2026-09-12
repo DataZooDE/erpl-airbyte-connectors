@@ -23,7 +23,7 @@ jobs:
       - run: uv run pytest unit_tests -q
 
   image:
-    name: Build the connector image
+    name: Build the connector image and run Airbyte's standard tests
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -67,6 +67,14 @@ jobs:
       - run: uv sync --frozen
       - name: Fetch the ERPL extensions
         run: ./bin/fetch-extensions.sh "$PWD/.erpl"
+      - name: Airbyte standard connector tests
+        run: |
+          export ERPL_EXTENSION_DIR="$PWD/.erpl"
+          export LD_LIBRARY_PATH="$PWD/.erpl/v1.5.5/linux_amd64"
+          ./bin/write-secrets.sh
+          ./bin/build-image.sh
+          uv run pytest integration_tests -q --connector-image datazoo/source-sap:dev
+
       - name: Run the e2e suite
         run: |
           export ERPL_EXTENSION_DIR="$PWD/.erpl"
@@ -74,4 +82,11 @@ jobs:
           # Fails the job if any protocol would silently skip for want of a
           # variable, rather than reporting green on a suite that did not run.
           export ERPL_E2E_REQUIRED=1
-          uv run pytest e2e -q
+          uv run pytest e2e -q -m "not slow"
+
+      - name: Volume tests
+        # Six-figure extracts; kept out of the fast lane.
+        run: |
+          export ERPL_EXTENSION_DIR="$PWD/.erpl"
+          export LD_LIBRARY_PATH="$PWD/.erpl/v1.5.5/linux_amd64"
+          uv run pytest e2e -q -m slow

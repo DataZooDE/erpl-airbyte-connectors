@@ -107,12 +107,14 @@ class BicsDriver(ProtocolDriver):
                 SapObject(
                     name=name,
                     json_schema=schema,
-                    supports_incremental=False,  # BICS exposes no change tracking
+                    supports_incremental=self.supports_incremental(override),
                     meta={
                         "cube": cube,
                         "query": override.get("query"),
                         "session_id": session_id_for(name),
                         "row_axis": list(override.get("rows") or []),
+                        "cursor_variable": override.get("cursor_variable"),
+                        "cursor_field": override.get("cursor_field"),
                     },
                 )
             )
@@ -186,14 +188,41 @@ class BicsDriver(ProtocolDriver):
 
     # ---- the stateful workflow ------------------------------------------------
 
-    def session_statements(self, obj: SapObject, extra_filter: tuple[str, Sequence[str]] | None = None) -> list[str]:
+    @staticmethod
+    def supports_incremental(override: Mapping[str, Any]) -> bool:
+        """BICS exposes no change tracking, so a watermark needs a BEx variable.
+
+        A cursor field on its own would mean re-reading the whole query and
+        discarding most of it, which is not incremental in any useful sense.
+        """
+        return bool(override.get("cursor_variable") and override.get("cursor_field"))
+
+    def session_statements(
+        self,
+        obj: SapObject,
+        extra_filter: tuple[str, Sequence[str]] | None = None,
+        state: Mapping[str, Any] | None = None,
+    ) -> list[str]:
         """The full begin -> configure -> result sequence for one BICS session."""
         override = self._object_overrides().get(obj.name, {})
         session_id = str(obj.meta["session_id"])
         cube = str(obj.meta["cube"])
 
         begin_args = [_lit(cube), f"id := {_lit(session_id)}", "return := 'RESULT'"]
-        variables = override.get("variables") or []
+        variables = list(override.get("variables") or [])
+
+        # The watermark: restrict the query to everything at or after the highest
+        # value seen last run, so BW does the filtering instead of the connector.
+        cursor_variable = override.get("cursor_variable")
+        cursor_field = override.get("cursor_field")
+        if cursor_variable and cursor_field:
+            watermark = (state or {}).get(str(cursor_field)) or override.get("cursor_start")
+            if watermark not in (None, ""):
+                variables.append(
+                    {"name": cursor_variable, "sign": "I", "op": "GE",
+                     "low": str(watermark), "high": ""}
+                )
+
         if variables:
             rendered = []
             for var in variables:
@@ -267,7 +296,7 @@ class BicsDriver(ProtocolDriver):
         members = slice_by.get("members") or []
 
         if not (characteristic and members):
-            statements = self.session_statements(obj)
+            statements = self.session_statements(obj, state=state)
             return [
                 ReadPlan(
                     sql=statements[-1],
@@ -288,7 +317,9 @@ class BicsDriver(ProtocolDriver):
                 change_mode_field=obj.change_mode_field,
                 meta={**obj.meta, "session_id": session_id_for(obj.name, str(member))},
             )
-            statements = self.session_statements(sliced, extra_filter=(characteristic, [member]))
+            statements = self.session_statements(
+                sliced, extra_filter=(characteristic, [member]), state=state
+            )
             plans.append(
                 ReadPlan(
                     sql=statements[-1],

@@ -304,6 +304,22 @@ connectionSpecification:
                         high: {type: string}
                         sign: {type: string, enum: [I, E], default: I}
                         op: {type: string}
+                  cursor_variable:
+                    title: Cursor Variable
+                    description: >-
+                      BEx variable restricted to everything at or after the highest value
+                      seen last run. BW has no change tracking, so incremental sync needs
+                      a variable the query is filtered by -- typically a period.
+                    type: string
+                    examples: ["ZVAR_CALMONTH"]
+                  cursor_field:
+                    title: Cursor Field
+                    description: Result column whose highest value is tracked, e.g. "0CALMONTH".
+                    type: string
+                  cursor_start:
+                    title: Cursor Start
+                    description: Value to use on the first run, before any state exists.
+                    type: string
                   slice_by:
                     title: Slice By
                     description: >-
@@ -343,10 +359,19 @@ connectionSpecification:
               minimum: 1
               maximum: 32
               order: 3
+            skip_unchanged:
+              title: Skip Unchanged Sources
+              description: >-
+                Ask SAP for the provider's last-changed timestamp before a delta read,
+                and skip the extraction entirely when nothing has changed. Costs one
+                cheap call; saves a subscription round trip on a quiet stream.
+              type: boolean
+              default: true
+              order: 4
             objects:
               title: Providers
               type: array
-              order: 4
+              order: 5
               items:
                 type: object
                 required: [name]

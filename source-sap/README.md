@@ -44,10 +44,20 @@ ERPL_ALLOW_UNPINNED=1 ./bin/fetch-extensions.sh ./.erpl   # prints the digests
 ## Tests
 
 ```bash
-uv run pytest unit_tests -q                    # pure unit tests
-uv run pytest integration_tests -q             # needs a live SAP system
-uv run pytest e2e -q                           # full connector runs, no mocks
+uv run pytest unit_tests -q                        # pure unit tests, no SAP
+uv run pytest e2e -q -m "not slow"                 # full connector runs, no mocks
+uv run pytest e2e -q -m slow                       # six-figure extracts
+./bin/build-image.sh
+uv run pytest integration_tests -q \
+    --connector-image datazoo/source-sap:dev       # Airbyte's standard tests
 ```
+
+`integration_tests/` runs Airbyte's own standard connector suite. It needs
+`secrets/config.json`, which `./bin/write-secrets.sh` generates from the same
+environment (pointing `ashost` at the Docker bridge gateway, so the same file
+works from the host and from inside the image). Pass `--connector-image` so the
+suite uses an image built by `bin/build-image.sh`: without it the CDK generates
+its own Dockerfile, which cannot bake in the ERPL extensions.
 
 Integration and e2e tests talk to a real SAP system — by default the
 [ABAP Platform Trial](https://hub.docker.com/r/sapse/abap-platform-trial) running
@@ -66,6 +76,18 @@ empty to skip cleanly:
 ERPL_SAP_ODP_CONTEXT=ABAP_CDS ERPL_SAP_ODP_NAME='ZJRODPVSQL$F' \
 ERPL_SAP_ODP_ODATA_URL='http://localhost:50000/sap/opu/odata/sap/Z_ODP_DL2_SRV/FactsOfZJRODPVSQL' \
   uv run pytest e2e -q
+```
+
+## Performance
+
+`./bin/benchmark.py` measures replication throughput end to end — the connector
+as a subprocess, RECORD messages against wall-clock time — across the
+partitioning and threading matrix. Results in
+[docs/performance.md](../docs/performance.md).
+
+```bash
+./bin/benchmark.py --list
+./bin/benchmark.py --repeat 3 --markdown ../docs/performance.md
 ```
 
 ## Building the image

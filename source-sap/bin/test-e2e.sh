@@ -24,4 +24,7 @@ export ERPL_SAP_PASSWORD="${ERPL_SAP_PASSWORD:-ABAPtr2023#00}"
 export ERPL_SAP_LANG="${ERPL_SAP_LANG:-EN}"
 export ERPL_SAP_BASE_URL="${ERPL_SAP_BASE_URL:-http://localhost:50000}"
 
+# The standard connector tests read secrets/config.json, so keep it in step.
+./bin/write-secrets.sh
+
 exec uv run pytest e2e "$@"

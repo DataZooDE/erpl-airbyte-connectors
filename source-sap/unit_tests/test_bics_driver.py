@@ -166,3 +166,80 @@ class TestGrandTotalWithoutARowAxis:
 
     def test_non_string_cells_are_ignored(self):
         assert not is_grand_total_row({"0CALDAY": None, "AMOUNT": 1.0})
+
+
+class TestBicsIncremental:
+    """BICS has no change tracking, but a BEx variable can carry a watermark.
+
+    A query restricted by a period variable can be re-run with the variable set
+    from the highest period seen last time, which is as close to incremental as
+    BW gets without an ODP extractor behind it.
+    """
+
+    def _obj(self, **meta):
+        return SapObject(name="Q", json_schema={},
+                         meta={"cube": "C", "query": "Q", "session_id": "s", **meta})
+
+    def _driver(self, **obj):
+        return driver(objects=[{"name": "Q", "cube": "C", **obj}])
+
+    def test_a_cursor_variable_makes_the_stream_incremental(self):
+        d = self._driver(cursor_variable="ZVAR_MONTH", cursor_field="0CALMONTH")
+        assert d.supports_incremental({"cursor_variable": "ZVAR_MONTH",
+                                       "cursor_field": "0CALMONTH"})
+
+    def test_a_cursor_field_alone_is_not_enough(self):
+        # Without a variable there is nothing to restrict the query with, so the
+        # "incremental" run would re-read everything and dedupe client-side.
+        d = self._driver(cursor_field="0CALMONTH")
+        assert not d.supports_incremental({"cursor_field": "0CALMONTH"})
+
+    def test_the_state_value_fills_the_variable(self):
+        d = self._driver(cursor_variable="ZVAR_MONTH", cursor_field="0CALMONTH")
+        stmts = d.session_statements(
+            self._obj(cursor_variable="ZVAR_MONTH", cursor_field="0CALMONTH"),
+            state={"0CALMONTH": "202603"},
+        )
+        assert "'ZVAR_MONTH' AS NAME" in stmts[0]
+        assert "'202603' AS LOW" in stmts[0]
+
+    def test_the_watermark_uses_a_greater_or_equal_style_selection(self):
+        d = self._driver(cursor_variable="ZVAR_MONTH", cursor_field="0CALMONTH")
+        stmts = d.session_statements(
+            self._obj(cursor_variable="ZVAR_MONTH", cursor_field="0CALMONTH"),
+            state={"0CALMONTH": "202603"},
+        )
+        # BW's selection options: GE is the watermark shape.
+        assert "'GE' AS OP" in stmts[0]
+
+    def test_without_state_the_configured_start_is_used(self):
+        d = self._driver(cursor_variable="ZVAR_MONTH", cursor_field="0CALMONTH",
+                         cursor_start="202601")
+        stmts = d.session_statements(
+            self._obj(cursor_variable="ZVAR_MONTH", cursor_field="0CALMONTH"), state={}
+        )
+        assert "'202601' AS LOW" in stmts[0]
+
+    def test_without_state_or_a_start_the_variable_is_left_unset(self):
+        d = self._driver(cursor_variable="ZVAR_MONTH", cursor_field="0CALMONTH")
+        stmts = d.session_statements(
+            self._obj(cursor_variable="ZVAR_MONTH", cursor_field="0CALMONTH"), state={}
+        )
+        assert "ZVAR_MONTH" not in stmts[0]
+
+    def test_an_explicit_variable_binding_is_not_overwritten(self):
+        d = self._driver(cursor_variable="ZVAR_MONTH", cursor_field="0CALMONTH",
+                         variables=[{"name": "ZVAR_REGION", "low": "EU"}])
+        stmts = d.session_statements(
+            self._obj(cursor_variable="ZVAR_MONTH", cursor_field="0CALMONTH"),
+            state={"0CALMONTH": "202603"},
+        )
+        assert "'ZVAR_REGION' AS NAME" in stmts[0] and "'ZVAR_MONTH' AS NAME" in stmts[0]
+
+    def test_the_watermark_value_is_escaped(self):
+        d = self._driver(cursor_variable="ZVAR_MONTH", cursor_field="0CALMONTH")
+        stmts = d.session_statements(
+            self._obj(cursor_variable="ZVAR_MONTH", cursor_field="0CALMONTH"),
+            state={"0CALMONTH": "a' OR '1'='1"},
+        )
+        assert stmts[0].count("'") % 2 == 0
