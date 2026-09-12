@@ -107,7 +107,7 @@ class TestReturnGuardIsCaseInsensitive:
         driver = RfcInvokeDriver(
             {**CONN, "protocol": {"mode": "rfc_invoke", "objects": [{"name": "x", "function": "F"}]}}
         )
-        plan = ReadPlan(sql="x", slice_={"function": "F", "path_field": "T", **slice_})
+        plan = ReadPlan(sql="x", meta={"function": "F", "path_field": "T", **slice_})
         return list(driver.records_from(plan, cursor))
 
     @pytest.mark.parametrize("name", ["return", "Return", "e_return", "Et_Return"])

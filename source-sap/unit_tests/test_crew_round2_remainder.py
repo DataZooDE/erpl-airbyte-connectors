@@ -108,9 +108,7 @@ class TestScalarExportsAreProjected:
         result = cursor.execute.return_value
         result.description = [("ECHOTEXT", "x"), ("RESPTEXT", "y"), ("SURPRISE", "z")]
         result.fetchone.return_value = ("a", "b", "c")
-        plan = ReadPlan(
-            sql="x", slice_={"function": "F", "path_field": None, "export_fields": ["ECHOTEXT", "RESPTEXT"]}
-        )
+        plan = ReadPlan(sql="x", meta={"function": "F", "path_field": None, "export_fields": ["ECHOTEXT", "RESPTEXT"]})
         assert list(self._driver().records_from(plan, cursor)) == [{"ECHOTEXT": "a", "RESPTEXT": "b"}]
 
     def test_without_a_declared_field_list_everything_scalar_is_kept(self):
@@ -120,5 +118,5 @@ class TestScalarExportsAreProjected:
         result = cursor.execute.return_value
         result.description = [("A", "x"), ("B", "y")]
         result.fetchone.return_value = ("1", "2")
-        plan = ReadPlan(sql="x", slice_={"function": "F", "path_field": None})
+        plan = ReadPlan(sql="x", meta={"function": "F", "path_field": None})
         assert list(self._driver().records_from(plan, cursor)) == [{"A": "1", "B": "2"}]

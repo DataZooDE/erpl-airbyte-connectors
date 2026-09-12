@@ -32,7 +32,12 @@ class ReadPlan:
 
     sql: str
     params: Sequence[Any] = ()
+    #: Identifies which slice of the stream this is. Logged as the partition's
+    #: identity, so it holds only slice keys.
     slice_: Mapping[str, Any] = field(default_factory=dict)
+    #: Driver machinery for executing the plan -- setup statements, which result
+    #: parameter to read. Never logged as the slice.
+    meta: Mapping[str, Any] = field(default_factory=dict)
 
     def execute(self, cursor: duckdb.DuckDBPyConnection) -> duckdb.DuckDBPyConnection:
         return cursor.execute(self.sql, list(self.params)) if self.params else cursor.execute(self.sql)
@@ -90,7 +95,7 @@ class ProtocolDriver(ABC):
         whole result of a call is a single row, and its `RETURN` table has to be
         inspected before any record is emitted.
         """
-        for statement in plan.slice_.get("setup", ()):  # BICS opens a session first
+        for statement in plan.meta.get("setup", ()):  # BICS opens a session first
             cursor.execute(statement)
         result = plan.execute(cursor)
         columns = columns_of(result.description)

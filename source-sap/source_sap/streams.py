@@ -53,8 +53,7 @@ class ErplPartition(Partition):
         return self._stream_name
 
     def to_slice(self) -> Mapping[str, Any] | None:
-        # `setup` holds BICS session statements; it is machinery, not a slice key.
-        return {k: v for k, v in self._plan.slice_.items() if k != "setup"}
+        return dict(self._plan.slice_)
 
     def __hash__(self) -> int:
         return hash((self._stream_name, self._plan.sql, tuple(map(str, self._plan.params))))

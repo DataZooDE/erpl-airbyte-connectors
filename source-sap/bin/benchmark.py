@@ -262,7 +262,7 @@ def assert_quiet_system() -> None:
         readable = cmdline.replace("\0", " ").strip()
         if "benchmark.py" in readable:
             continue
-        if re.search(r"pytest|source_sap\.run", readable):
+        if re.search(r"source_sap\.run|pytest (unit_tests|e2e|integration_tests)", readable):
             busy.append(f"  pid {proc_dir.name}: {readable[:100]}")
     if busy:
         sys.exit(

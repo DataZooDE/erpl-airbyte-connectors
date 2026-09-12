@@ -19,7 +19,6 @@ result parameter, and `RETURN` is inspected before a single record is emitted.
 
 from __future__ import annotations
 
-import datetime
 import logging
 import re
 from collections.abc import Iterator, Mapping, Sequence
@@ -37,6 +36,7 @@ from source_sap.protocols.base import (
     sql_struct_literal,
 )
 from source_sap.retry import retry_transient
+from source_sap.sap_values import sap_date, sap_time, sap_timestamp
 from source_sap.session import ErplSession
 from source_sap.types import coerce_value
 
@@ -54,39 +54,8 @@ RESULT_BLOCKS = ("tables", "export", "changing")
 PARAMETER_BLOCKS = ("import", "export", "changing", "tables")
 
 
-def _sap_date(value: str) -> str:
-    """Accept either SAP's compact DATS form or ISO, and emit ISO."""
-    text = value.strip()
-    for fmt in ("%Y%m%d", "%Y-%m-%d"):
-        try:
-            return datetime.datetime.strptime(text, fmt).date().isoformat()
-        except ValueError:
-            continue
-    raise ValueError(f"{value!r} is not a date (expected YYYYMMDD or YYYY-MM-DD)")
-
-
-def _sap_time(value: str) -> str:
-    text = value.strip()
-    for fmt in ("%H%M%S", "%H:%M:%S", "%H%M", "%H:%M"):
-        try:
-            return datetime.datetime.strptime(text, fmt).time().isoformat()
-        except ValueError:
-            continue
-    raise ValueError(f"{value!r} is not a time (expected HHMMSS or HH:MM:SS)")
-
-
-def _sap_timestamp(value: str) -> str:
-    text = value.strip()
-    for fmt in ("%Y%m%d%H%M%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
-        try:
-            return datetime.datetime.strptime(text, fmt).isoformat(sep=" ")
-        except ValueError:
-            continue
-    raise ValueError(f"{value!r} is not a timestamp")
-
-
 #: Names SAP modules use for the BAPI return table. `RETURN` is the classic one,
-#: but function modules are free to prefix by direction and plenty do.
+#: but modules are free to prefix by direction and plenty do.
 RETURN_NAMES = ("RETURN", "E_RETURN", "ET_RETURN", "EX_RETURN", "T_RETURN", "RETURN_TAB")
 
 #: Fields that mark a row type as BAPIRET-shaped, used to warn about a module
@@ -418,11 +387,11 @@ class RfcInvokeDriver(ProtocolDriver):
             if declared and not is_sap_type_safe(declared):
                 declared = ""  # fall through to a plain literal
             if declared == "DATE":
-                return f"DATE {sql_string_literal(_sap_date(str(value)))}"
+                return f"DATE {sql_string_literal(sap_date(str(value)))}"
             if declared == "TIME":
-                return f"TIME {sql_string_literal(_sap_time(str(value)))}"
+                return f"TIME {sql_string_literal(sap_time(str(value)))}"
             if declared.startswith("TIMESTAMP"):
-                return f"TIMESTAMP {sql_string_literal(_sap_timestamp(str(value)))}"
+                return f"TIMESTAMP {sql_string_literal(sap_timestamp(str(value)))}"
             if declared.startswith("DECIMAL"):
                 return f"{sql_string_literal(str(value))}::{declared}"
             if declared in _INTEGER_TYPES:
@@ -500,8 +469,8 @@ class RfcInvokeDriver(ProtocolDriver):
         # that RETURN can be checked alongside the payload, from one invocation.
         return ReadPlan(
             sql=f"SELECT * FROM sap_rfc_invoke({', '.join(args)})",
-            slice_={
-                **slice_keys,
+            slice_=dict(slice_keys),
+            meta={
                 "function": function,
                 "path_field": obj.meta.get("path_field"),
                 "return_field": obj.meta.get("return_field"),
@@ -517,18 +486,18 @@ class RfcInvokeDriver(ProtocolDriver):
             return
         values = dict(zip(columns, row, strict=False))
 
-        return_field = plan.slice_.get("return_field") or find_return_field(columns)
+        return_field = plan.meta.get("return_field") or find_return_field(columns)
         return_table = values.get(return_field) if return_field else None
         if is_bapi_failure(return_table):
-            function = plan.slice_.get("function", "the function module")
+            function = plan.meta.get("function", "the function module")
             raise config_error(f"{function} reported an error: {describe_failure(return_table)}")
 
-        path_field = plan.slice_.get("path_field")
+        path_field = plan.meta.get("path_field")
         if not path_field:
             # No path: the scalar export parameters are the single record.
             # Projected against what discovery promised, so the records and the
             # schema cannot disagree about which fields exist.
-            declared = plan.slice_.get("export_fields")
+            declared = plan.meta.get("export_fields")
             yield {
                 key: coerce_value(value)
                 for key, value in values.items()

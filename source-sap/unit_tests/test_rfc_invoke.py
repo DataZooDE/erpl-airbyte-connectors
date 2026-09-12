@@ -203,7 +203,7 @@ class TestBapiReturnHandling:
             [{"AIRLINEID": "LH"}],
             [{"TYPE": "E", "MESSAGE": "Airline LH is unknown", "ID": "BC", "NUMBER": "001"}],
         )
-        plan = ReadPlan(sql="x", slice_={"path_field": "FLIGHT_LIST", "function": "BAPI_X"})
+        plan = ReadPlan(sql="x", meta={"path_field": "FLIGHT_LIST", "function": "BAPI_X"})
         with pytest.raises(Exception, match="Airline LH is unknown"):
             list(driver().records_from(plan, cursor))
 
@@ -212,7 +212,7 @@ class TestBapiReturnHandling:
         result = cursor.execute.return_value
         result.description = [("FLIGHT_LIST", "x"), ("RETURN", "y")]
         result.fetchone.return_value = ([{"AIRLINEID": "LH"}, {"AIRLINEID": "AA"}], [])
-        plan = ReadPlan(sql="x", slice_={"path_field": "FLIGHT_LIST", "function": "BAPI_X"})
+        plan = ReadPlan(sql="x", meta={"path_field": "FLIGHT_LIST", "function": "BAPI_X"})
         assert list(driver().records_from(plan, cursor)) == [{"AIRLINEID": "LH"}, {"AIRLINEID": "AA"}]
 
     def test_without_a_path_the_scalar_exports_are_one_record(self):
@@ -220,7 +220,7 @@ class TestBapiReturnHandling:
         result = cursor.execute.return_value
         result.description = [("ECHOTEXT", "x"), ("RESPTEXT", "y")]
         result.fetchone.return_value = ("hello", "SAP R/3")
-        plan = ReadPlan(sql="x", slice_={"path_field": None, "function": "STFC_CONNECTION"})
+        plan = ReadPlan(sql="x", meta={"path_field": None, "function": "STFC_CONNECTION"})
         assert list(driver().records_from(plan, cursor)) == [{"ECHOTEXT": "hello", "RESPTEXT": "SAP R/3"}]
 
     def test_values_are_coerced_for_json(self):
@@ -234,14 +234,14 @@ class TestBapiReturnHandling:
             [{"D": datetime.date(2026, 1, 2), "P": Decimal("1.50")}],
             [],
         )
-        plan = ReadPlan(sql="x", slice_={"path_field": "T", "function": "F"})
+        plan = ReadPlan(sql="x", meta={"path_field": "T", "function": "F"})
         assert list(driver().records_from(plan, cursor)) == [{"D": "2026-01-02", "P": "1.50"}]
 
     def test_a_call_that_returns_no_row_yields_nothing(self):
         cursor = MagicMock()
         cursor.execute.return_value.description = [("T", "x")]
         cursor.execute.return_value.fetchone.return_value = None
-        plan = ReadPlan(sql="x", slice_={"path_field": "T", "function": "F"})
+        plan = ReadPlan(sql="x", meta={"path_field": "T", "function": "F"})
         assert list(driver().records_from(plan, cursor)) == []
 
 

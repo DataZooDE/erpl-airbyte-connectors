@@ -314,10 +314,8 @@ class BicsDriver(ProtocolDriver):
             return [
                 ReadPlan(
                     sql=statements[-1],
-                    slice_={
-                        "session_id": obj.meta["session_id"],
-                        "setup": statements[:-1],
-                    },
+                    slice_={"session_id": obj.meta["session_id"]},
+                    meta={"setup": statements[:-1]},
                 )
             ]
 
@@ -339,8 +337,8 @@ class BicsDriver(ProtocolDriver):
                         "session_id": sliced.meta["session_id"],
                         "characteristic": characteristic,
                         "member": member,
-                        "setup": statements[:-1],
                     },
+                    meta={"setup": statements[:-1]},
                 )
             )
         return plans

@@ -120,5 +120,5 @@ class TestBicsCallSites:
         )
         for plan in d.read_plans(None, self._obj(), incremental=False, state={}):
             assert balanced(plan.sql)
-            for setup in plan.slice_["setup"]:
+            for setup in plan.meta["setup"]:
                 assert balanced(setup), setup

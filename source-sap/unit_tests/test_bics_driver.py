@@ -237,3 +237,34 @@ class TestBicsIncremental:
             state={"0CALMONTH": "a' OR '1'='1"},
         )
         assert stmts[0].count("'") % 2 == 0
+
+
+class TestSetupTravelsWithEveryPlan:
+    """BICS is stateful: without its setup statements, `sap_bics_result` answers
+    "No BICS state found for id". A refactor once moved setup out of the plan for
+    the unsliced path only, and every unit test still passed."""
+
+    def _obj(self):
+        return SapObject(name="Q", json_schema={},
+                         meta={"cube": "C", "query": "Q", "session_id": "abyte_q"})
+
+    def test_an_unsliced_plan_carries_its_setup(self):
+        d = driver(objects=[{"name": "Q", "cube": "C", "rows": ["0CALDAY"]}])
+        (plan,) = d.read_plans(None, self._obj(), incremental=False, state={})
+        assert plan.meta["setup"], "the session must be opened before the result is read"
+        assert any("sap_bics_begin" in s for s in plan.meta["setup"])
+        assert plan.sql.startswith("SELECT * FROM sap_bics_result(")
+
+    def test_every_sliced_plan_carries_its_own_setup(self):
+        d = driver(objects=[{"name": "Q", "cube": "C",
+                             "slice_by": {"characteristic": "0CALMONTH",
+                                          "members": ["202601", "202602"]}}])
+        plans = d.read_plans(None, self._obj(), incremental=False, state={})
+        assert len(plans) == 2
+        for plan in plans:
+            assert any("sap_bics_begin" in s for s in plan.meta["setup"])
+
+    def test_setup_is_not_reported_as_a_slice_key(self):
+        d = driver(objects=[{"name": "Q", "cube": "C"}])
+        (plan,) = d.read_plans(None, self._obj(), incremental=False, state={})
+        assert "setup" not in plan.slice_

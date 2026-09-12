@@ -117,7 +117,7 @@ class TestBapiReturnIsFoundWhateverItIsCalled:
         result = cursor.execute.return_value
         result.description = [(c, "x") for c in columns]
         result.fetchone.return_value = values
-        plan = ReadPlan(sql="x", slice_={"function": "F", "path_field": "T", **slice_})
+        plan = ReadPlan(sql="x", meta={"function": "F", "path_field": "T", **slice_})
         return list(self._driver().records_from(plan, cursor))
 
     @pytest.mark.parametrize("name", ["RETURN", "E_RETURN", "ET_RETURN", "T_RETURN", "RETURN_TAB", "EX_RETURN"])

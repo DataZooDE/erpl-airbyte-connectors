@@ -54,7 +54,7 @@ class TestDefaultRecordsFrom:
     def test_setup_statements_run_before_the_query(self):
         # BICS opens a stateful session before the result can be fetched.
         cursor = _cursor([("A", "VARCHAR")], [[("x",)]])
-        plan = ReadPlan(sql="SELECT 1", slice_={"setup": ["BEGIN ONE", "BEGIN TWO"]})
+        plan = ReadPlan(sql="SELECT 1", meta={"setup": ["BEGIN ONE", "BEGIN TWO"]})
         list(self._driver().records_from(plan, cursor))
         executed = [c.args[0] for c in cursor.execute.call_args_list]
         assert executed[:2] == ["BEGIN ONE", "BEGIN TWO"]
@@ -98,3 +98,29 @@ class TestPartitionUsesTheDriver:
         with pytest.raises(AirbyteTracedException):
             list(partition.read())
         cursor.mark_failed.assert_called_once()
+
+
+class TestReadPlanSeparatesMachineryFromSliceKeys:
+    """`slice_` is logged as the partition's identity, so driver machinery does
+    not belong in it: a BICS setup script or a column list ends up in debug
+    output claiming to describe which slice of the stream this is."""
+
+    def test_the_slice_only_carries_slice_keys(self):
+        from source_sap.protocols.base import ReadPlan
+
+        plan = ReadPlan(sql="x", slice_={"member": "202601"}, meta={"setup": ["BEGIN"], "path_field": "T"})
+        assert plan.slice_ == {"member": "202601"}
+
+    def test_machinery_lives_in_meta(self):
+        from source_sap.protocols.base import ReadPlan
+
+        plan = ReadPlan(sql="x", meta={"setup": ["BEGIN"]})
+        assert plan.meta["setup"] == ["BEGIN"]
+
+    def test_a_partition_reports_only_the_slice_keys(self):
+        from source_sap.protocols.base import ReadPlan
+        from source_sap.streams import ErplPartition
+
+        plan = ReadPlan(sql="x", slice_={"member": "202601"}, meta={"setup": ["BEGIN"]})
+        partition = ErplPartition("S", MagicMock(), plan, None, driver=MagicMock())
+        assert partition.to_slice() == {"member": "202601"}
