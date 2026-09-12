@@ -71,9 +71,31 @@ class TestReferenceDocumentsEveryField:
     by the driver but reachable from neither.
     """
 
-    def _documented(self) -> set[str]:
-        page = (DOCS / "reference.md").read_text()
-        return set(re.findall(r"`([a-z_]+(?:\[\]\.[a-z_]+)?)`", page))
+    def _documented(self) -> dict[str | None, set[str]]:
+        """Field names per page section, keyed by the protocol the section heads.
+
+        Per section, not page-wide: `objects[].filter` would otherwise count as
+        documented for `bics` purely because `filter` is backticked in the `rfc`
+        section, and the page would be certified complete for a protocol that
+        never mentions it.
+        """
+        modes = {
+            branch["properties"]["mode"]["const"]
+            for branch in SPEC["connectionSpecification"]["properties"]["protocol"]["oneOf"]
+        }
+        by_section: dict[str | None, set[str]] = {None: set()}
+        section: str | None = None
+        for line in (DOCS / "reference.md").read_text().splitlines():
+            if line.startswith("## "):
+                heading = re.match(r"## `([a-z_]+)`", line)
+                section = heading.group(1) if heading and heading.group(1) in modes else None
+            names = set(re.findall(r"`([a-z_]+(?:\[\]\.[a-z_]+)?)`", line))
+            by_section.setdefault(section, set()).update(names)
+            if section is None:
+                # Connection and Limits apply to every protocol.
+                for mode in modes:
+                    by_section.setdefault(mode, set()).update(names)
+        return by_section
 
     def _spec_fields(self) -> set[str]:
         fields = set()
@@ -89,14 +111,25 @@ class TestReferenceDocumentsEveryField:
                 fields.add(name)
         return fields
 
+    def _spec_fields_by_mode(self) -> dict[str, set[str]]:
+        shared = {n for n in SPEC["connectionSpecification"]["properties"] if n != "protocol"}
+        by_mode = {}
+        for branch in SPEC["connectionSpecification"]["properties"]["protocol"]["oneOf"]:
+            fields = {n for n in branch["properties"] if n != "mode"}
+            items = (branch["properties"].get("objects") or {}).get("items", {})
+            fields.update(f"objects[].{n}" for n in items.get("properties", {}))
+            by_mode[branch["properties"]["mode"]["const"]] = fields | shared
+        return by_mode
+
     def test_every_spec_field_appears_in_the_reference(self):
         documented = self._documented()
-        missing = sorted(
-            field
-            for field in self._spec_fields()
-            if field not in documented and field.split("].")[-1] not in documented
-        )
-        assert not missing, "docs/reference.md says it lists every field but omits: " + ", ".join(missing)
+        missing = []
+        for mode, fields in self._spec_fields_by_mode().items():
+            known = documented.get(mode, set()) | documented[None]
+            for field in fields:
+                if field not in known and field.split("].")[-1] not in known:
+                    missing.append(f"{field} (under {mode})")
+        assert not missing, "docs/reference.md says it lists every field but omits: " + ", ".join(sorted(missing))
 
     def _branch_fields(self) -> dict[str, set[str]]:
         """Field names per protocol mode, plus the shared connection fields."""

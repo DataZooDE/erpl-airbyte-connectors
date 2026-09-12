@@ -81,6 +81,7 @@ class TestSpecAndDriversAgree:
     @pytest.mark.parametrize("mode", ["rfc", "rfc_invoke", "bics", "odp_rfc", "odp_odata"])
     def test_every_field_the_spec_offers_is_read_by_its_driver(self, mode):
         """The spec must not advertise a setting the driver ignores."""
+        import ast
         import pathlib
 
         import yaml
@@ -92,7 +93,24 @@ class TestSpecAndDriversAgree:
             if b["properties"]["mode"]["const"] == mode
         )
         offered = set((branch["properties"].get("objects") or {}).get("items", {}).get("properties", {}))
-        source = pathlib.Path(f"source_sap/protocols/{'rfc_invoke' if mode == 'rfc_invoke' else mode}.py").read_text()
+        module = ast.parse(
+            pathlib.Path(f"source_sap/protocols/{'rfc_invoke' if mode == 'rfc_invoke' else mode}.py").read_text()
+        )
+        # Where config is actually read: a `.get("field")` call, or the name in a
+        # tuple literal, which is how rfc.py drives THREADS and MAX_ROWS from a
+        # table. A bare mention does not count -- BICS `properties` satisfied the
+        # old substring check through `schema["properties"]` elsewhere in the
+        # file, and would have stayed green with the override read deleted.
+        read: set[str] = set()
+        for node in ast.walk(module):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "get":
+                for arg in node.args:
+                    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                        read.add(arg.value)
+            elif isinstance(node, ast.Tuple):
+                for element in node.elts:
+                    if isinstance(element, ast.Constant) and isinstance(element.value, str):
+                        read.add(element.value)
         # `name` addresses the object rather than configuring it.
-        ignored = sorted(f for f in offered - {"name"} if f'"{f}"' not in source)
+        ignored = sorted(offered - {"name"} - read)
         assert not ignored, f"{mode}: the spec offers fields the driver never reads: {ignored}"

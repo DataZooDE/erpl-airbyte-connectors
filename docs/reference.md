@@ -43,6 +43,7 @@ settings live in every mode.
 | `objects[].columns` | Columns to read. Pushed into SAP — the most effective setting here. |
 | `objects[].filter` | ABAP `WHERE` fragment evaluated by SAP, e.g. `CARRID = 'LH'`. |
 | `objects[].cursor_field` | Date or timestamp column for incremental sync. |
+| `objects[].primary_key` | Fields forming the record key. Overrides the key SAP reports, which CDS views sometimes omit. |
 | `objects[].partitions`, `fetch_size`, `threads`, `max_rows` | Per-table overrides. |
 
 Full guide: [tables and CDS views](tables.md).
@@ -67,6 +68,7 @@ Full guide: [calling function modules](function-modules.md).
 | Field | Description |
 |---|---|
 | `query_pattern`, `object_type` | Bulk discovery of `QUERY`, `CUBE` or `INFOPROVIDER`. |
+| `objects[].name` | Stream name; also the default InfoProvider when `cube` is omitted. |
 | `objects[].cube`, `query` | InfoProvider and BEx query. |
 | `objects[].rows`, `columns` | Characteristics and key figures. |
 | `objects[].variables` | BEx variables: `{name, low, high, sign, op}`. |
@@ -88,6 +90,7 @@ Full guide: [BW queries](bw-queries.md).
 | `skip_unchanged` | Probe the last-changed timestamp and skip an unchanged delta. Default `true`. |
 | `objects[].name`, `context` | The provider. |
 | `objects[].subscriber_process` | The ODQ subscription key. Set it when two connections read the same provider. |
+| `objects[].primary_key` | Fields forming the record key, where the provider reports none. |
 | `objects[].columns` | Projection. |
 | `objects[].filters` | Server-side selections, OR-combined: `{fieldname, sign, op, low, high}`. |
 

@@ -130,8 +130,18 @@ def run_connector(
     # properly as an ERROR trace.
     reported = any(m.get("type") == "TRACE" and m.get("trace", {}).get("type") == "ERROR" for m in messages)
     if proc.returncode != 0 and not reported:
+        # A negative code is a signal. -9 in particular is the OOM killer, and
+        # it reads as a connector defect unless it is named: the partial output
+        # looks exactly like a short read.
+        killed = (
+            f" (killed by signal {-proc.returncode}"
+            + ("; -9 is usually the OOM killer -- check free memory on this host" if proc.returncode == -9 else "")
+            + ")"
+            if proc.returncode < 0
+            else ""
+        )
         raise AssertionError(
-            f"connector exited {proc.returncode} without an ERROR trace message\n"
+            f"connector exited {proc.returncode}{killed} without an ERROR trace message\n"
             f"unparsed stdout:\n" + "\n".join(unparsed[-20:]) + "\n"
             f"stderr:\n{proc.stderr[-4000:]}"
         )

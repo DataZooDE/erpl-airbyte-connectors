@@ -29,7 +29,12 @@ def _sql_literal(value: str) -> str:
 
 CURSOR_FIELD_PATTERN = re.compile(r"^[A-Z0-9_/]{1,30}$")
 
-#: erpl's own default fetch budget, in bytes per round trip.
+#: erpl's own default fetch budget, in bytes per round trip, read from **erpl
+#: v2026.09.04**. Both the partition scaling below and the memory envelope in
+#: docs/operations.md are derived from it, so a later erpl that changes its
+#: default would make this connector mis-size quietly. `bin/trace-round-trips.py`
+#: is the check: a serial scan's rows-per-round-trip moves if this number is
+#: stale.
 DEFAULT_FETCH_SIZE = 1_310_720
 
 #: Below this many bytes per partition worker, a round trip carries so few rows

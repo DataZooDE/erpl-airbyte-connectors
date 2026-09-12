@@ -30,6 +30,10 @@ MEDIUM_TABLE = os.environ.get("ERPL_BENCH_MEDIUM_TABLE", "SBOOK")
 #: The suite asserts an order of magnitude, not an exact count, because DDIC
 #: content differs between systems and grows as objects are created.
 MIN_BENCH_ROWS = 100_000
+
+#: The serial-vs-partitioned comparison caps both reads, so this -- not
+#: MIN_BENCH_ROWS -- is what a non-empty result looks like there.
+VOLUME_ROW_CAP = 50_000
 MIN_MEDIUM_ROWS = 10_000
 
 
@@ -91,13 +95,13 @@ class TestLargeTable:
         key = ["TABNAME"] if BENCH_TABLE == "DD02L" else None
         serial = run_connector(
             "read",
-            config=_config(sap_rfc_config, BENCH_TABLE, partitions=0, columns=key, max_rows=50_000),
+            config=_config(sap_rfc_config, BENCH_TABLE, partitions=0, columns=key, max_rows=VOLUME_ROW_CAP),
             catalog=_catalog(BENCH_TABLE, schema),
             tmp_path=tmp_path,
         )
         parallel = run_connector(
             "read",
-            config=_config(sap_rfc_config, BENCH_TABLE, partitions=8, columns=key, max_rows=50_000),
+            config=_config(sap_rfc_config, BENCH_TABLE, partitions=8, columns=key, max_rows=VOLUME_ROW_CAP),
             catalog=_catalog(BENCH_TABLE, schema),
             tmp_path=tmp_path,
         )
@@ -111,7 +115,9 @@ class TestLargeTable:
         # returned nothing at all -- a projection that drops the column, a
         # max_rows fault, a stream-name change that makes records() match
         # nothing -- would otherwise pass this test green.
-        assert len(left) >= MIN_BENCH_ROWS, f"the serial read returned only {len(left):,} rows"
+        assert len(left) == VOLUME_ROW_CAP, (
+            f"the serial read returned {len(left):,}, not the {VOLUME_ROW_CAP:,} asked for"
+        )
         assert len(left) == len(right), f"serial {len(left):,} vs partitioned {len(right):,}"
         assert left == right
 

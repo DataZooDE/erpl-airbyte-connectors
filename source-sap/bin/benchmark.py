@@ -9,7 +9,7 @@ connector actually spends its time.
 
     ./bin/benchmark.py                       # the default matrix
     ./bin/benchmark.py --case rfc-dd02l-p8   # one case
-    ./bin/benchmark.py --repeat 3 --markdown docs/performance.md
+    ./bin/benchmark.py --repeat 3 --markdown ../docs/performance-raw.md
 
 Needs the same environment as the e2e suite; see bin/test-e2e.sh.
 """

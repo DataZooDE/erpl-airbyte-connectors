@@ -32,7 +32,7 @@ want.
 
 *Source: `benchmark.py`, one run per case.*
 
-| `DD02L`, all 55 columns | Before the budget fix | Now |
+| `DD02L`, all 55 columns | Before the budget fix¹ | Now |
 |---:|---:|---:|
 | 0 partitions (serial) | 9,450 | **9,422** |
 | 2 | 1,152 | 1,484 |
@@ -58,6 +58,11 @@ Seventeen rows per round trip against 107, and 6.3x the round trips. **The
 connector now scales the fetch budget with the partition count**, so asking for
 partitions no longer silently starves the workers. An explicit `fetch_size`
 still wins.
+
+¹ From a run against commit `c148066`, before the budget scaling landed. That
+run is not in [`performance-raw.md`](./performance-raw.md), which holds only the
+current matrix — the column is kept because the *shape* is the evidence, and
+reproducing it means checking out the old commit.
 
 That fix is visible in the table above: the penalty used to *grow* with the
 worker count (1,152 → 776 → 508) and is now flat at ~1,485 whatever the count.
