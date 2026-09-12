@@ -12,16 +12,31 @@ from __future__ import annotations
 
 import datetime
 
-_DATE_FORMATS = ("%Y%m%d", "%Y-%m-%d")
-#: Keyed by length, because SAP's digit-only times are fixed-width and
-#: `strptime("1030", "%H%M%S")` otherwise parses greedily as 10:03:00.
+#: Keyed by length wherever SAP's form is digits only. `strptime` is greedy --
+#: it reads "2026012" as %Y%m%d quite happily, and "1030" as %H%M%S -- so a
+#: config typo would become a valid but different value, and the wrong selection
+#: would reach SAP with the sync still green.
+_DATE_BY_LENGTH = {8: "%Y%m%d"}
+_DATE_FORMATS = ("%Y-%m-%d",)
 _TIME_BY_LENGTH = {6: "%H%M%S", 4: "%H%M"}
 _TIME_FORMATS = ("%H:%M:%S", "%H:%M")
-_TIMESTAMP_FORMATS = ("%Y%m%d%H%M%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S")
+_TIMESTAMP_BY_LENGTH = {14: "%Y%m%d%H%M%S"}
+_TIMESTAMP_FORMATS = ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S")
 
 
-def _parse(value: str, formats: tuple[str, ...], what: str, shape: str) -> datetime.datetime:
+def _parse(
+    value: str,
+    formats: tuple[str, ...],
+    what: str,
+    shape: str,
+    by_length: dict[int, str] | None = None,
+) -> datetime.datetime:
     text = str(value).strip()
+    if by_length is not None and text.isdigit():
+        fmt = by_length.get(len(text))
+        if fmt is None:
+            raise ValueError(f"{value!r} is not a {what} (expected {shape})")
+        formats = (fmt,)
     for fmt in formats:
         try:
             return datetime.datetime.strptime(text, fmt)
@@ -32,21 +47,20 @@ def _parse(value: str, formats: tuple[str, ...], what: str, shape: str) -> datet
 
 def sap_date(value: str) -> str:
     """SAP DATS or ISO in, ISO date out."""
-    return _parse(value, _DATE_FORMATS, "date", "YYYYMMDD or YYYY-MM-DD").date().isoformat()
+    return _parse(value, _DATE_FORMATS, "date", "YYYYMMDD or YYYY-MM-DD", _DATE_BY_LENGTH).date().isoformat()
 
 
 def sap_time(value: str) -> str:
     """SAP TIMS or ISO in, ISO time out."""
-    text = str(value).strip()
-    formats = _TIME_FORMATS
-    if text.isdigit():
-        fmt = _TIME_BY_LENGTH.get(len(text))
-        if fmt is None:
-            raise ValueError(f"{value!r} is not a time (expected HHMMSS or HH:MM:SS)")
-        formats = (fmt,)
-    return _parse(text, formats, "time", "HHMMSS or HH:MM:SS").time().isoformat()
+    return _parse(value, _TIME_FORMATS, "time", "HHMMSS or HH:MM:SS", _TIME_BY_LENGTH).time().isoformat()
 
 
 def sap_timestamp(value: str) -> str:
     """SAP UTC long form or ISO in, ISO timestamp out."""
-    return _parse(value, _TIMESTAMP_FORMATS, "timestamp", "YYYYMMDDHHMMSS or an ISO timestamp").isoformat(sep=" ")
+    return _parse(
+        value,
+        _TIMESTAMP_FORMATS,
+        "timestamp",
+        "YYYYMMDDHHMMSS or an ISO timestamp",
+        _TIMESTAMP_BY_LENGTH,
+    ).isoformat(sep=" ")
