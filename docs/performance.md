@@ -44,12 +44,31 @@ anyone whose system behaves differently, but raise it only with a measurement.
 
 :::note
 The ERPL extension's own documentation reports a 2.7x speed-up from eight
-partitions. That benchmark measures a single-column extract in raw DuckDB —
-extraction only, no connector. Both figures can be true: what this table shows
-is that the speed-up does not survive to the connector's output. Why it does not
-is **not** established here. An earlier version of this document asserted an
-explanation from ad-hoc probes; the probes were not measuring comparable work,
-and the explanation has been withdrawn rather than restated.
+partitions, measured on a single-column extract. Both figures are right about
+different workloads.
+
+**One cause is established.** erpl's fetch budget is counted in *bytes* and is
+divided across partition workers, so a wide row starves each one. Counting RFC
+round trips in erpl's trace, on the 55-column table:
+
+| | RFC calls | rows per call |
+|---|---:|---:|
+| serial, default budget | 1,540 | 107 |
+| 8 partitions, default budget | 9,680 | **17** |
+| 8 partitions, 8x budget | 1,760 | 94 |
+| 8 partitions, 32x budget | 880 | 187 |
+
+The connector now scales the budget with the partition count for this reason, so
+asking for partitions no longer silently starves the workers. Inside DuckDB that
+is worth roughly 2x over serial.
+
+**A second cause is not established.** Even with the budget scaled, a partitioned
+read measured end to end through the connector is still slower than a serial one
+(111s against 19s on this table). Something about pulling a partitioned scan's
+rows into Python costs more than the extraction saves, and this document does not
+claim to know what. Four earlier attempts to explain it from timings were each
+measuring something other than what the connector does; the round-trip counts
+above are the first evidence here that survived scrutiny.
 :::
 
 ## Other protocols

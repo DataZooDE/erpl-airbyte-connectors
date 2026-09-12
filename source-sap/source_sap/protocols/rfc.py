@@ -28,6 +28,15 @@ def _sql_literal(value: str) -> str:
 
 CURSOR_FIELD_PATTERN = re.compile(r"^[A-Z0-9_/]{1,30}$")
 
+#: erpl's own default fetch budget, in bytes per round trip.
+DEFAULT_FETCH_SIZE = 1_310_720
+
+#: Upper bound on the fetch budget. 4 MB was an arbitrary guess that turned out
+#: to cap below what measurement showed to be useful: 32x the default (~42 MB)
+#: gave the best throughput on a 55-column table. 64 MiB per round trip, times a
+#: bounded worker count, stays within a connector container's means.
+MAX_FETCH_SIZE = 64 * 1024 * 1024
+
 
 def sap_cursor_literal(value: Any, sap_type: str | None) -> str:
     """Render a state value as the ABAP literal SAP expects.
@@ -196,11 +205,28 @@ class RfcDriver(ProtocolDriver):
             combined = " AND ".join(f"( {p} )" for p in predicates) if len(predicates) > 1 else predicates[0]
             args.append(f"FILTER := {_sql_literal(combined)}")
 
-        # Stated unconditionally: an omitted PARTITIONS meant one thing here and
+        # Stated unconditionally so one number governs the query.
         args.append(f"PARTITIONS := {partitions}")
 
+        # erpl divides its fetch budget across partition workers, and the budget
+        # is bytes rather than rows, so on a wide table each worker is starved.
+        # Measured on a 55-column, 164,673-row table: a serial scan gets ~107
+        # rows per RFC round trip, eight partitions with the default budget get
+        # ~17, and the round-trip count goes up 6.3x. Scaling the budget with the
+        # worker count restores ~187 rows per call, so asking for partitions is
+        # taken as asking for the budget to keep up.
+        #
+        # This removes one penalty, not all of them: measured end to end, a
+        # partitioned read is still slower through this connector than a serial
+        # one even with the budget scaled, and why is not established. Hence
+        # `partitions` defaults to 0. See docs/performance.md.
+        fetch_size = clamp(override.get("fetch_size", self.options.get("fetch_size")), 1, MAX_FETCH_SIZE)
+        if fetch_size is None and partitions:
+            fetch_size = min(DEFAULT_FETCH_SIZE * partitions, MAX_FETCH_SIZE)
+        if fetch_size is not None:
+            args.append(f"FETCH_SIZE := {fetch_size}")
+
         for cfg_key, sql_key, low, high in (
-            ("fetch_size", "FETCH_SIZE", 1, 4_000_000),
             ("threads", "THREADS", 0, 32),
             ("max_rows", "MAX_ROWS", 0, 2_147_483_647),
         ):

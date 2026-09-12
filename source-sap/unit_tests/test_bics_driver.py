@@ -245,8 +245,7 @@ class TestSetupTravelsWithEveryPlan:
     the unsliced path only, and every unit test still passed."""
 
     def _obj(self):
-        return SapObject(name="Q", json_schema={},
-                         meta={"cube": "C", "query": "Q", "session_id": "abyte_q"})
+        return SapObject(name="Q", json_schema={}, meta={"cube": "C", "query": "Q", "session_id": "abyte_q"})
 
     def test_an_unsliced_plan_carries_its_setup(self):
         d = driver(objects=[{"name": "Q", "cube": "C", "rows": ["0CALDAY"]}])
@@ -256,9 +255,11 @@ class TestSetupTravelsWithEveryPlan:
         assert plan.sql.startswith("SELECT * FROM sap_bics_result(")
 
     def test_every_sliced_plan_carries_its_own_setup(self):
-        d = driver(objects=[{"name": "Q", "cube": "C",
-                             "slice_by": {"characteristic": "0CALMONTH",
-                                          "members": ["202601", "202602"]}}])
+        d = driver(
+            objects=[
+                {"name": "Q", "cube": "C", "slice_by": {"characteristic": "0CALMONTH", "members": ["202601", "202602"]}}
+            ]
+        )
         plans = d.read_plans(None, self._obj(), incremental=False, state={})
         assert len(plans) == 2
         for plan in plans:
