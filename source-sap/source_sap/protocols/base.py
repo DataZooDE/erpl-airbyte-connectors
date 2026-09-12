@@ -127,7 +127,17 @@ class ProtocolDriver(ABC):
     def on_success(  # noqa: B027 - an optional hook, deliberately not abstract
         self, session: ErplSession, obj: SapObject, state: Mapping[str, Any]
     ) -> None:
-        """Called once a stream has been fully read (cursor cleanup, etc.)."""
+        """Called once a stream has been fully read, before its checkpoint."""
+
+    def release(  # noqa: B027 - an optional hook, deliberately not abstract
+        self, session: ErplSession, obj: SapObject, state: Mapping[str, Any]
+    ) -> None:
+        """Hand back what the read took from SAP, however the read ended.
+
+        Separate from `on_success` because a failed stream must still release --
+        suppressing the checkpoint is about *position*, not about resources, and
+        a delta cursor left reserved on SAP outlives the process that opened it.
+        """
 
     def next_state(self, session: ErplSession, obj: SapObject, previous: Mapping[str, Any]) -> Mapping[str, Any]:
         """State to checkpoint after a successful incremental read."""

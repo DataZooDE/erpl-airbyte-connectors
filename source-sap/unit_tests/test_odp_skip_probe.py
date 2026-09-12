@@ -137,6 +137,6 @@ class TestSkippedStreamStillCheckpoints:
         state = {"subscriber_process": "AB_X", "initialized": True, "last_modified": "20260101120000.0"}
         d.read_plans(session, obj(), incremental=True, state=state)
         session.cursor.return_value.execute.reset_mock()
-        d.on_success(session, obj(), state)
+        d.release(session, obj(), state)
         executed = " ".join(str(c) for c in session.cursor.return_value.execute.call_args_list)
         assert "close_delta_cursor" not in executed

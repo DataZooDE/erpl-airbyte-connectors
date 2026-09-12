@@ -356,8 +356,14 @@ class OdpRfcDriver(ProtocolDriver):
             state["last_modified"] = probed
         return state
 
-    def on_success(self, session: ErplSession, obj: SapObject, state: Mapping[str, Any]) -> None:
-        """Release the server-side delta cursor; the subscription itself survives."""
+    def release(self, session: ErplSession, obj: SapObject, state: Mapping[str, Any]) -> None:
+        """Release the server-side delta cursor; the subscription itself survives.
+
+        Runs after a failed read too. Closing is not confirming -- erpl calls
+        RODPS_REPL_ODP_CLOSE, and a cursor left mid-fetch is refused rather than
+        silently consumed -- so this cannot cost the next run its packets, and a
+        refusal is reported instead of a cursor nobody knew was open.
+        """
         with self._skipped_lock:
             # Read membership then clear it: a second read of the same stream in
             # one process must not inherit a stale skip and leave a real cursor

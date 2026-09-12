@@ -31,8 +31,12 @@ it, and the queue grows. In transaction `ODQMON`, the same thing is under the
 subscriber type `SAP_BW` / name `ERPL`.
 
 A cursor that is open between syncs is not normal. The connector closes its
-delta cursor after a successful run and reports what SAP said; if the close was
-refused, the message says so and the next run recovers it.
+delta cursor at the end of every run — successful or failed — and reports what
+SAP said. A run that failed mid-fetch is the case SAP refuses to close
+(`ILLEGAL_REQ_STATE_FOR_CONFIRM`): the log says `could not be closed (REFUSED)`,
+the cursor stays reserved until it times out, and
+[`sap_odp_drop`](troubleshooting.md) clears it if you need the queue sooner.
+Closing is not confirming, so a close never costs the next run its packets.
 
 ## What a failed sync leaves behind
 
@@ -41,7 +45,7 @@ refused, the message says so and the next run recovers it.
 | RFC tables | nothing; the next run re-reads |
 | Function modules | nothing |
 | BICS | the BICS session is server-side and times out on its own |
-| ODP | the subscription stays, the position does **not** advance, and the next run re-reads that delta |
+| ODP | the subscription stays, the position does **not** advance, and the next run re-reads that delta. The delta cursor is closed on the way out; if the failure was mid-fetch SAP refuses the close, and the log says so |
 
 The connector deliberately does not checkpoint an ODP position for a stream that
 did not complete. That means a failure near the end of a long delta costs you

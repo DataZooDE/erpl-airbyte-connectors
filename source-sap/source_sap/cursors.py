@@ -152,6 +152,7 @@ class DriverStateCursor(_BaseCursor):
         self._state: dict[str, Any] = dict(initial_state or {})
         self._failed = False
         self._emitted = False
+        self._released = False
 
     @property
     def state(self) -> dict[str, Any]:
@@ -169,17 +170,38 @@ class DriverStateCursor(_BaseCursor):
         # Deliberately no checkpoint here. See the module docstring.
         return
 
+    def _release(self) -> None:
+        """Hand the SAP-side resource back, whether or not the stream completed."""
+        with self._lock:
+            if self._released:
+                return
+            self._released = True
+        if self._failed:
+            # Stated at INFO because it is the one cleanup a failed run still
+            # performs, and an operator reading the log after a failure is
+            # entitled to know the SAP side was handed back.
+            logger.info("Releasing SAP-side resources for %s after a failed read.", self._stream_name)
+        try:
+            self._driver.release(self._session, self._object, self._state)
+        except Exception:  # on the way out of a run that may already be failing
+            logger.warning("Releasing SAP resources for %s failed.", self._stream_name, exc_info=True)
+
     def ensure_at_least_one_state_emitted(self) -> None:
         with self._lock:
-            if self._failed or self._emitted:
-                if self._failed:
-                    logger.warning(
-                        "Not checkpointing %s: the stream did not complete, so the next sync "
-                        "resumes from the previous position.",
-                        self._stream_name,
-                    )
-                return
-            self._emitted = True
+            failed, done = self._failed, self._emitted
+            if not (failed or done):
+                self._emitted = True
+        # Before the early return: a failed stream owes SAP its cursor back even
+        # though it owes the platform no checkpoint.
+        self._release()
+        if failed or done:
+            if failed:
+                logger.warning(
+                    "Not checkpointing %s: the stream did not complete, so the next sync "
+                    "resumes from the previous position.",
+                    self._stream_name,
+                )
+            return
         try:
             self._driver.on_success(self._session, self._object, self._state)
         except Exception:  # cleanup must never lose the checkpoint

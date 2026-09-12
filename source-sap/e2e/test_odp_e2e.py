@@ -187,6 +187,38 @@ class TestOdpRfc:
             con.close()
         assert open_cursors == 0, "the connector left a delta cursor reserved on SAP after the first run"
 
+    def test_a_failed_delta_read_still_releases_the_cursor(self, config, tmp_path, odp_target, fresh_odp_subscription):
+        """The failure path owes SAP its cursor back, even owing no checkpoint.
+
+        Deliberately not asserted as "zero open cursors": SAP refuses to close a
+        cursor left mid-fetch, so a green assertion there would depend on where
+        the failure happened to land. What changed, and what is asserted, is that
+        the connector attempts the release at all -- before this it was reachable
+        only through `on_success`, which a failed stream never reaches.
+        """
+        context, name = odp_target
+        stream_name = f"{context}/{name}"
+        stream = _discover(config, tmp_path, stream_name)
+        broken = {
+            **config,
+            "protocol": {
+                **config["protocol"],
+                "objects": [{"name": name, "context": context, "columns": ["NO_SUCH_COLUMN_XYZ"]}],
+            },
+        }
+        messages = run_connector(
+            "read",
+            config=broken,
+            catalog=_catalog(stream_name, stream["json_schema"], "incremental"),
+            tmp_path=tmp_path,
+        )
+        assert errors(messages), "the projection names a column SAP does not have; the read must fail"
+        logs = " ".join(m.get("log", {}).get("message", "") for m in messages if m.get("type") == "LOG")
+        assert "Releasing SAP-side resources" in logs, (
+            "a failed delta read must still hand the ODP cursor back; it did not try"
+        )
+        assert "Not checkpointing" in logs, "and it must still refuse to advance the position"
+
     def test_an_unchanged_source_is_skipped_without_opening_a_cursor(
         self,
         config,

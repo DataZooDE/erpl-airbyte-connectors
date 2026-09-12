@@ -125,7 +125,7 @@ class TestOdpODataStateSeeding:
 
 
 class TestOdpRfcCursorCleanup:
-    """`on_success` runs before `next_state`, so on the first run state is empty."""
+    """`release` runs before `next_state`, so on the first run state is empty."""
 
     def _obj(self):
         return SapObject(
@@ -145,18 +145,18 @@ class TestOdpRfcCursorCleanup:
     def test_the_cursor_is_closed_on_the_first_run_with_empty_state(self):
         # The first DELTAINIT would otherwise leave a delta cursor reserved on SAP.
         session = self._session()
-        rfc_driver().on_success(session, self._obj(), {})
+        rfc_driver().release(session, self._obj(), {})
         sql = session.cursor.return_value.execute.call_args[0][0]
         assert "sap_odp_close_delta_cursor" in sql
         assert "'AB_X'" in sql
 
     def test_state_wins_over_the_derived_name(self):
         session = self._session()
-        rfc_driver().on_success(session, self._obj(), {"subscriber_process": "AB_FROM_STATE"})
+        rfc_driver().release(session, self._obj(), {"subscriber_process": "AB_FROM_STATE"})
         assert "'AB_FROM_STATE'" in session.cursor.return_value.execute.call_args[0][0]
 
     def test_nothing_is_closed_when_there_is_no_subscriber_at_all(self):
         session = self._session()
         obj = SapObject(name="x", json_schema={}, meta={"context": "C", "odp_name": "N"})
-        rfc_driver().on_success(session, obj, {})
+        rfc_driver().release(session, obj, {})
         session.cursor.return_value.execute.assert_not_called()
