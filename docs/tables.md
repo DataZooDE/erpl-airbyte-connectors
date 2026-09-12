@@ -86,7 +86,7 @@ DDIC types map as SAP means them, not as they look:
 | SAP | JSON | Why |
 |---|---|---|
 | `NUMC`, `ACCP` | string | leading zeros are significant |
-| `DEC`, `CURR`, `QUAN` | number (`big_number`) | emitted as an exact decimal string, never a float |
+| `DEC`, `CURR`, `QUAN` | number (`big_number`), or integer when the field has no decimal places | emitted as an exact decimal string, never a float |
 | `DATS` | string, `format: date` | |
 | `TIMS` | string, `format: time` | |
 | `RAW`, `RAWSTRING` | string, base64 | |

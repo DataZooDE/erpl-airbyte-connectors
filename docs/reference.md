@@ -105,6 +105,7 @@ Values outside these are clamped rather than rejected:
 |---|---|
 | `concurrency` | 1–32 |
 | `partitions` | 0–64 |
-| `threads` | 0–32 |
+| `threads` (rfc) | 0–32 |
+| `threads` (odp_rfc) | 1–32 |
 | `fetch_size` | 1–67,108,864 bytes |
 | `max_page_size` | 1–100,000 |

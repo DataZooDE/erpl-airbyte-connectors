@@ -36,9 +36,13 @@ RFC_FUNCTION_SEARCH       discovery
 RFC_GROUP_SEARCH          discovery
 ```
 
-`RFC_READ_TABLE` has vendor variants that some systems prefer;
-`/BODS/RFC_READ_TABLE`, `/SAPDS/RFC_READ_TABLE` and their `…2` forms are used
-only if you select them explicitly.
+`RFC_READ_TABLE` has vendor variants that some systems prefer. They are used
+only if you name one in `read_table_function`:
+
+```
+/BODS/RFC_READ_TABLE       /BODS/RFC_READ_TABLE2
+/SAPDS/RFC_READ_TABLE      /SAPDS/RFC_READ_TABLE2
+```
 
 ### Function modules (`rfc_invoke`)
 
