@@ -1,0 +1,30 @@
+# Consumed by the CDK's pytest-based standard tests
+# (airbyte_cdk.test.standard_tests), which replaced the old CAT runner.
+connector_image: datazoo/source-sap:dev
+acceptance_tests:
+  spec:
+    tests:
+      - spec_path: "source_sap/spec.yaml"
+  connection:
+    tests:
+      - config_path: "secrets/config.json"
+        status: "succeed"
+      - config_path: "integration_tests/invalid_config.json"
+        status: "failed"
+  discovery:
+    tests:
+      - config_path: "secrets/config.json"
+  basic_read:
+    tests:
+      - config_path: "secrets/config.json"
+        configured_catalog_path: "integration_tests/configured_catalog.json"
+        empty_streams: []
+  full_refresh:
+    tests:
+      - config_path: "secrets/config.json"
+        configured_catalog_path: "integration_tests/configured_catalog.json"
+  incremental:
+    bypass_reason: >-
+      Incremental sync is covered end-to-end in e2e/, which asserts the two-run
+      delta behaviour (snapshot, then changes only) against a live SAP system.
+      The standard suite cannot express a server-side delta pointer.

@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  static:
+    name: Lint and unit tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: source-sap
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run pytest unit_tests -q
+
+  image:
+    name: Build the connector image
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: source-sap
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build
+        run: ./bin/build-image.sh
+      - name: The image must run spec with no network access
+        run: |
+          docker run --rm --network none datazoo/source-sap:dev spec > spec.jsonl
+          grep -q '"type":"SPEC"' spec.jsonl
+
+  e2e:
+    name: End-to-end against the SAP sandbox
+    # The ABAP trial is too large for a hosted runner; this needs the self-hosted
+    # box where the a4h container lives.
+    runs-on: [self-hosted, sap-sandbox]
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    defaults:
+      run:
+        working-directory: source-sap
+    env:
+      ERPL_SAP_ASHOST: localhost
+      ERPL_SAP_SYSNR: "00"
+      ERPL_SAP_CLIENT: "001"
+      ERPL_SAP_USER: DEVELOPER
+      ERPL_SAP_PASSWORD: ${{ secrets.SAP_A4H_PASSWORD }}
+      ERPL_SAP_LANG: EN
+      ERPL_SAP_BASE_URL: http://localhost:50000
+      # Absent rather than empty when unset -- the fixtures skip on absence only.
+      ERPL_SAP_ODP_CONTEXT: ${{ vars.SAP_ODP_CONTEXT }}
+      ERPL_SAP_ODP_NAME: ${{ vars.SAP_ODP_NAME }}
+      ERPL_SAP_ODP_ODATA_URL: ${{ vars.SAP_ODP_ODATA_URL }}
+      ERPL_SAP_BICS_CUBE: ${{ vars.SAP_BICS_CUBE }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --frozen
+      - name: Fetch the ERPL extensions
+        run: ./bin/fetch-extensions.sh "$PWD/.erpl"
+      - name: Run the e2e suite
+        run: |
+          export ERPL_EXTENSION_DIR="$PWD/.erpl"
+          export LD_LIBRARY_PATH="$PWD/.erpl/v1.5.5/linux_amd64"
+          uv run pytest e2e -q
