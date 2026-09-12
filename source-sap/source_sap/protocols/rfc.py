@@ -16,7 +16,7 @@ from source_sap.protocols.base import (
     sql_string_literal,
 )
 from source_sap.retry import retry_transient
-from source_sap.sap_values import sap_date, sap_time, sap_timestamp
+from source_sap.sap_values import MAX_STATE_VALUE, checked_state_value, sap_date, sap_time, sap_timestamp
 from source_sap.session import ErplSession
 from source_sap.types import json_schema_for_fields, primary_key_for_fields
 
@@ -47,7 +47,8 @@ MAX_FETCH_SIZE = 64 * 1024 * 1024
 #: 72-character lines, so a multi-kilobyte value dumps or truncates inside SAP
 #: rather than failing here. Real checkpoints are short -- a DATS value is 8
 #: characters -- so this is generous for anything legitimate.
-MAX_CURSOR_VALUE = 255
+#: Kept as the RFC-local name for the shared bound.
+MAX_CURSOR_VALUE = MAX_STATE_VALUE
 
 
 def sap_cursor_literal(value: Any, sap_type: str | None) -> str:
@@ -215,8 +216,19 @@ class RfcDriver(ProtocolDriver):
 
         cursor_field = obj.meta.get("cursor_field") or override.get("cursor_field")
         if incremental and cursor_field:
+            # Checked here as well as at discovery: this is the sink -- the name
+            # is interpolated bare into the ABAP fragment, because an identifier
+            # cannot go through `sql_string_literal` -- and the fallback above
+            # reads a config value discovery may never have seen.
+            checked_field = str(cursor_field).strip().upper()
+            if not CURSOR_FIELD_PATTERN.match(checked_field):
+                raise config_error(
+                    f"cursor_field {cursor_field!r} is not a valid SAP field name. It must be "
+                    "1-30 characters of A-Z, 0-9, underscore and slash."
+                )
             since = state.get(str(cursor_field))
             if since not in (None, ""):
+                checked_state_value(str(cursor_field), since)
                 try:
                     literal = sap_cursor_literal(since, obj.meta.get("cursor_sap_type"))
                 except ValueError as exc:
@@ -224,15 +236,9 @@ class RfcDriver(ProtocolDriver):
                         f"The state value for {cursor_field} is not usable as a SAP "
                         f"{obj.meta.get('cursor_sap_type')} value: {exc}. Reset the stream's state."
                     ) from exc
-                if len(literal) > MAX_CURSOR_VALUE:
-                    raise ValueError(
-                        f"The state value for {cursor_field} is {len(literal)} characters, "
-                        f"over the {MAX_CURSOR_VALUE} this connector will send to SAP. "
-                        "Reset the stream's state."
-                    )
                 # SAP's WHERE fragment uses ABAP literal quoting, and the whole
                 # fragment is then a DuckDB string literal -- hence two levels.
-                predicates.append(f"{cursor_field} >= {_sql_literal(literal)}")
+                predicates.append(f"{checked_field} >= {_sql_literal(literal)}")
         if predicates:
             combined = " AND ".join(f"( {p} )" for p in predicates) if len(predicates) > 1 else predicates[0]
             args.append(f"FILTER := {_sql_literal(combined)}")

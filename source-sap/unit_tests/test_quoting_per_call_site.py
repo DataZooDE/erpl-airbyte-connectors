@@ -122,3 +122,51 @@ class TestBicsCallSites:
             assert balanced(plan.sql)
             for setup in plan.meta["setup"]:
                 assert balanced(setup), setup
+
+
+class TestTheCursorFieldIsCheckedAtTheSink:
+    """Discovery validates the name; `read_plans` is where it reaches SAP.
+
+    The use site falls back to the raw config value when `meta` has no
+    `cursor_field`, so a name discovery never saw can reach the ABAP fragment --
+    where it cannot be quoted, being an identifier.
+    """
+
+    @staticmethod
+    def _plans(name):
+        from source_sap.protocols.base import SapObject
+        from source_sap.protocols.rfc import RfcDriver
+
+        driver = RfcDriver(
+            {
+                "ashost": "h",
+                "sysnr": "00",
+                "client": "001",
+                "user": "u",
+                "password": "p",
+                "protocol": {"mode": "rfc", "objects": [{"name": "T", "cursor_field": name}]},
+            }
+        )
+        obj = SapObject(name="T", json_schema={}, supports_incremental=True, meta={"table": "T"})
+        return driver.read_plans(None, obj, incremental=True, state={name: "20260101"})
+
+    @pytest.mark.parametrize(
+        "hostile",
+        ["ERDAT' OR '1'='1", "ERDAT; DROP TABLE", "ERDAT OR 1=1", "E" * 31, "erdat-x"],
+    )
+    def test_a_field_name_that_is_not_one_is_refused(self, hostile):
+        with pytest.raises(Exception) as caught:
+            self._plans(hostile)
+        assert "cursor_field" in str(caught.value) or "state value" in str(caught.value)
+
+    def test_the_name_that_reaches_sap_is_the_name_that_was_checked(self):
+        # Not the raw config spelling: validating one string and sending another
+        # is how a check gets bypassed.
+        assert "ERDAT >=" in self._plans(" erdat ")[0].sql
+
+    def test_an_empty_name_is_no_cursor_rather_than_an_error(self):
+        # Nothing to filter on, so the read is a full one -- not a refusal.
+        assert "FILTER" not in self._plans("")[0].sql
+
+    def test_a_real_field_name_still_works(self):
+        assert "ERDAT >=" in self._plans("ERDAT")[0].sql

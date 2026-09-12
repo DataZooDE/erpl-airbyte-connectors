@@ -11,6 +11,27 @@ function modules.
 from __future__ import annotations
 
 import datetime
+from typing import Any
+
+#: Longest value the connector will carry from Airbyte state into a SAP
+#: statement. State is replayed by the platform, so it is not always ours; SAP
+#: takes a WHERE fragment as 72-character lines and a BICS variable or RFC
+#: parameter is narrower still, so a multi-kilobyte value dumps or truncates
+#: inside SAP rather than failing here. Real checkpoints are short -- a DATS
+#: value is 8 characters.
+MAX_STATE_VALUE = 255
+
+
+def checked_state_value(field: str, value: Any) -> str:
+    """A state value on its way into a SAP statement, or a message naming it."""
+    text = str(value)
+    if len(text) > MAX_STATE_VALUE:
+        raise ValueError(
+            f"The state value for {field} is {len(text)} characters, over the "
+            f"{MAX_STATE_VALUE} this connector will send to SAP. Reset the stream's state."
+        )
+    return text
+
 
 #: Keyed by length wherever SAP's form is digits only. `strptime` is greedy --
 #: it reads "2026012" as %Y%m%d quite happily, and "1030" as %H%M%S -- so a

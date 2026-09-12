@@ -12,6 +12,7 @@ that URL fetched.
 from unittest.mock import MagicMock
 
 import pytest
+from airbyte_cdk.utils.traced_exception import AirbyteTracedException
 
 from source_sap.protocols.odp_odata import OdpODataDriver
 
@@ -41,13 +42,13 @@ class TestACatalogUrlOffTheGateway:
         session = _session_returning("http://169.254.169.254/latest/meta-data/")
         # Nothing survives the confinement, so the configuration selects nothing
         # -- which the driver reports rather than syncing an empty catalogue.
-        with pytest.raises(Exception) as caught:
+        with pytest.raises(AirbyteTracedException) as caught:
             _driver()._selected_entity_sets(session)
         assert "No ODP OData entity sets selected" in str(caught.value)
 
     def test_is_reported_rather_than_dropped_in_silence(self, caplog):
         session = _session_returning("http://169.254.169.254/latest/meta-data/")
-        with pytest.raises(Exception):
+        with pytest.raises(AirbyteTracedException):
             _driver()._selected_entity_sets(session)
         assert "169.254.169.254" in caplog.text
 
@@ -73,6 +74,6 @@ class TestACatalogUrlOnTheGateway:
 class TestAConfiguredUrlIsStillConfined:
     def test_an_off_gateway_configured_url_is_a_config_error(self):
         driver = _driver(objects=[{"entity_set": "E", "url": "https://elsewhere.example.net/x"}])
-        with pytest.raises(Exception) as caught:
+        with pytest.raises(AirbyteTracedException) as caught:
             driver._selected_entity_sets(_session_returning())
         assert "elsewhere.example.net" in str(caught.value)

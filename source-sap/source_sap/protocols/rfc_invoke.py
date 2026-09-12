@@ -36,7 +36,7 @@ from source_sap.protocols.base import (
     sql_struct_literal,
 )
 from source_sap.retry import retry_transient
-from source_sap.sap_values import sap_date, sap_time, sap_timestamp
+from source_sap.sap_values import checked_state_value, sap_date, sap_time, sap_timestamp
 from source_sap.session import ErplSession
 from source_sap.types import coerce_value
 
@@ -444,6 +444,9 @@ class RfcInvokeDriver(ProtocolDriver):
             cursor_parameter = obj.meta.get("cursor_parameter")
             since = state.get(str(cursor_field)) if cursor_field else None
             if cursor_parameter and since not in (None, ""):
+                # Bounded like the other two state sinks: a CHAR-typed parameter
+                # is not saved by the strict `sap_date` the typed ones get.
+                checked_state_value(str(cursor_field), since)
                 base_parameters[str(cursor_parameter)] = since
 
         slice_by = obj.meta.get("slice_by") or {}

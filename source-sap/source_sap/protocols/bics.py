@@ -19,6 +19,7 @@ from source_sap.duck import schema_from_description
 from source_sap.errors import config_error, traced
 from source_sap.protocols.base import ProtocolDriver, ReadPlan, SapObject, sql_string_literal
 from source_sap.retry import retry_transient
+from source_sap.sap_values import checked_state_value
 from source_sap.session import ErplSession
 
 logger = logging.getLogger("airbyte")
@@ -235,6 +236,9 @@ class BicsDriver(ProtocolDriver):
         if cursor_variable and cursor_field:
             watermark = (state or {}).get(str(cursor_field)) or override.get("cursor_start")
             if watermark not in (None, ""):
+                # The same bound the RFC cursor has: this reaches BW as a
+                # variable's LOW, and state is replayed by the platform.
+                checked_state_value(str(cursor_field), watermark)
                 variables.append({"name": cursor_variable, "sign": "I", "op": "GE", "low": str(watermark), "high": ""})
 
         if variables:
