@@ -19,9 +19,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import resource
+import pathlib
+import re
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -174,11 +176,12 @@ def run_connector(case: Case, command: str, workdir: Path, catalog: dict | None 
         catalog_path.write_text(json.dumps(catalog))
         args += ["--catalog", str(catalog_path)]
 
-    before = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+    # `getrusage(RUSAGE_CHILDREN).ru_maxrss` is a high-water mark across every
+    # child the process has ever reaped, so it only ever climbs and cannot
+    # attribute memory to one case. Sample the child's own VmHWM instead.
     start = time.perf_counter()
-    proc = subprocess.run(args, capture_output=True, text=True, cwd=HERE, timeout=3600)
+    proc, peak_kb = _run_and_watch_rss(args)
     elapsed = time.perf_counter() - start
-    after = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
 
     messages = []
     for line in proc.stdout.splitlines():
@@ -189,7 +192,71 @@ def run_connector(case: Case, command: str, workdir: Path, catalog: dict | None 
                 pass
     if proc.returncode != 0:
         raise RuntimeError(f"{case.key} {command} exited {proc.returncode}: {proc.stderr[-2000:]}")
-    return messages, elapsed, max(after - before, after) / 1024, len(proc.stdout)
+    return messages, elapsed, peak_kb / 1024, len(proc.stdout)
+
+
+def _run_and_watch_rss(args: list[str]) -> tuple[subprocess.CompletedProcess, float]:
+    """Run a child and return it together with its own peak RSS in KiB.
+
+    `VmHWM` is the kernel's high-water mark for that one process, which is
+    exactly what is wanted -- but it vanishes when the process exits, hence the
+    sampler thread.
+    """
+    peak = 0.0
+
+    def sample(pid: int, stop: threading.Event) -> None:
+        nonlocal peak
+        status = pathlib.Path(f"/proc/{pid}/status")
+        while not stop.wait(0.05):
+            try:
+                for line in status.read_text().splitlines():
+                    if line.startswith("VmHWM:"):
+                        peak = max(peak, float(line.split()[1]))
+                        break
+            except (OSError, ValueError, IndexError):
+                return  # the child is gone
+
+    process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=HERE)
+    stop = threading.Event()
+    watcher = threading.Thread(target=sample, args=(process.pid, stop), daemon=True)
+    watcher.start()
+    try:
+        stdout, stderr = process.communicate(timeout=3600)
+    finally:
+        stop.set()
+        watcher.join(timeout=1)
+    return subprocess.CompletedProcess(args, process.returncode, stdout, stderr), peak
+
+
+def assert_quiet_system() -> None:
+    """Refuse to measure while something else is using the same SAP system.
+
+    The first run of this matrix reported a 17x *slowdown* from partitioning,
+    because the e2e suite was hammering the same trial system throughout the
+    partitioned cases while the serial baseline had run before it started. A
+    benchmark that silently measures contention is worse than no benchmark.
+    """
+    own = {os.getpid(), os.getppid()}
+    busy = []
+    for proc_dir in pathlib.Path("/proc").iterdir():
+        if not proc_dir.name.isdigit() or int(proc_dir.name) in own:
+            continue
+        try:
+            cmdline = (proc_dir / "cmdline").read_bytes().decode(errors="replace")
+        except OSError:
+            continue
+        readable = cmdline.replace("\0", " ").strip()
+        if "benchmark.py" in readable:
+            continue
+        if re.search(r"pytest|source_sap\.run", readable):
+            busy.append(f"  pid {proc_dir.name}: {readable[:100]}")
+    if busy:
+        sys.exit(
+            "Something else is talking to SAP, so this would measure contention "
+            "rather than throughput:\n"
+            + "\n".join(busy)
+            + "\nWait for it to finish, or pass --allow-busy to measure anyway."
+        )
 
 
 def measure(case: Case, repeat: int, workdir: Path) -> Result:
@@ -288,7 +355,11 @@ def main() -> int:
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--markdown", type=Path, help="write a report here")
     parser.add_argument("--list", action="store_true", help="list the cases and exit")
+    parser.add_argument("--allow-busy", action="store_true", help="measure even if something else is using SAP")
     args = parser.parse_args()
+
+    if not args.list and not args.allow_busy:
+        assert_quiet_system()
 
     cases = build_matrix()
     if args.list:
