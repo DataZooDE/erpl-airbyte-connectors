@@ -61,7 +61,9 @@ class TestTheOverrideStillWins:
 
     def test_an_empty_value_is_not_an_override(self, tmp_path):
         with patch.dict(os.environ, {"ERPL_EXTENSION_DIR": ""}, clear=True):
-            assert default_extension_dir() == str(bundled_extension_dir())
+            sidecar = sidecar_extension_dir()
+            expected = str(sidecar) if sidecar is not None else str(bundled_extension_dir())
+            assert default_extension_dir() == expected
 
     def test_it_is_read_per_session_not_at_import(self, tmp_path):
         # A module constant resolved at import cannot be changed by a test, nor

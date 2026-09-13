@@ -34,7 +34,6 @@ jobs:
         with:
           version: 1.8.5
       - run: poetry install --all-extras
-      - uses: docker/setup-buildx-action@v3
       - name: Build
         run: ./bin/build-image.sh
       - name: The image must run spec with no network access
