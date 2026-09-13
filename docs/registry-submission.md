@@ -277,10 +277,14 @@ These take calendar time, so they should be asked before the work lands:
 And for the ERPL side: may the extensions be redistributed as PyPI wheels? That
 single answer decides between (e) and (b).
 
-## The licence problem (out of scope for this pass, unchanged)
+## The licence resolution and upstream submission
 
-This connector is licensed **BUSL-1.1**, matching the ERPL extensions it embeds.
-`airbyte_ops_mcp/connector_qa/checks/packaging.py` fails anything outside
-`{MIT, ELV2, AIRBYTE ENTERPRISE}`, with no support-level or language exemption.
-The metadata *schema* accepts the string; it is the QA gate that refuses it. That
-decision is tracked separately from this readiness assessment.
+This connector wrapper is licensed under **Elastic License 2.0 (ELv2)**, which is whitelisted by Airbyte's packaging QA check (`{MIT, ELV2, AIRBYTE ENTERPRISE}`) and protects against cloud resale while embedding `erpl-extensions` from PyPI.
+
+With ELv2, all 30 Airbyte local connector QA checks (`airbyte-internal-ops`) pass or skip cleanly:
+- **18 PASSED**
+- **12 SKIPPED** (Support-level 300 certified-tier structural checks)
+- **0 FAILED**
+
+**Upstream Pull Request:** [airbytehq/airbyte#85861](https://github.com/airbytehq/airbyte/pull/85861)
+
