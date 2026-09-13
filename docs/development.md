@@ -8,9 +8,9 @@ the [README](../README.md).
 Dependencies are managed with [uv](https://docs.astral.sh/uv/).
 
 ```bash
-uv sync                       # create .venv and install everything
-uv run pytest unit_tests -q   # fast tests, no SAP needed
-uv run source-sap spec
+poetry install                # create the venv and install everything
+poetry run pytest unit_tests -q   # fast tests, no SAP needed
+poetry run source-sap spec
 ```
 
 The ERPL extensions are **baked into the image** rather than installed at sync
@@ -37,11 +37,11 @@ ERPL_ALLOW_UNPINNED=1 ./bin/fetch-extensions.sh ./.erpl   # prints the digests
 ## Tests
 
 ```bash
-uv run pytest unit_tests -q                        # pure unit tests, no SAP
-uv run pytest e2e -q -m "not slow"                 # full connector runs, no mocks
-uv run pytest e2e -q -m slow                       # six-figure extracts
+poetry run pytest unit_tests -q                    # pure unit tests, no SAP
+poetry run pytest e2e -q -m "not slow"             # full connector runs, no mocks
+poetry run pytest e2e -q -m slow                   # six-figure extracts
 ./bin/build-image.sh
-uv run pytest integration_tests -q \
+poetry run pytest integration_tests -q \
     --connector-image datazoo/source-sap:dev       # Airbyte's standard tests
 ```
 

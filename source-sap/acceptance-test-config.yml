@@ -1,6 +1,6 @@
 # Consumed by the CDK's pytest-based standard tests
 # (airbyte_cdk.test.standard_tests), which replaced the old CAT runner.
-connector_image: datazoo/source-sap:dev
+connector_image: airbyte/source-sap:dev
 acceptance_tests:
   spec:
     tests:

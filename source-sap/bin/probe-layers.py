@@ -18,9 +18,9 @@ connector's workload:
   * every row is pulled through `fetchmany` exactly as `records_from` does, so
     DuckDB cannot skip reading the columns.
 
-    uv run ./bin/probe-layers.py                 # the default matrix
-    uv run ./bin/probe-layers.py --narrow        # two columns instead of all 55
-    uv run ./bin/probe-layers.py --connections   # RFC connections each path uses
+    poetry run ./bin/probe-layers.py                 # the default matrix
+    poetry run ./bin/probe-layers.py --narrow        # two columns instead of all 55
+    poetry run ./bin/probe-layers.py --connections   # RFC connections each path uses
 
 Needs the same environment as the e2e suite; see bin/test-e2e.sh.
 """

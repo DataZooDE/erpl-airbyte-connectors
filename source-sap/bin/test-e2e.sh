@@ -27,4 +27,4 @@ export ERPL_SAP_BASE_URL="${ERPL_SAP_BASE_URL:-http://localhost:50000}"
 # The standard connector tests read secrets/config.json, so keep it in step.
 ./bin/write-secrets.sh
 
-exec uv run pytest e2e "$@"
+exec poetry run pytest e2e -m "requires_creds or not requires_creds" "$@"

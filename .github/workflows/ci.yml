@@ -14,13 +14,15 @@ jobs:
         working-directory: source-sap
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: snok/install-poetry@v1
+        with:
+          version: 1.8.5
         with:
           enable-cache: true
-      - run: uv sync --frozen
-      - run: uv run ruff check .
-      - run: uv run ruff format --check .
-      - run: uv run pytest unit_tests -q
+      - run: poetry install --all-extras
+      - run: poetry run ruff check .
+      - run: poetry run ruff format --check .
+      - run: poetry run pytest unit_tests -q
 
   image:
     name: Build the connector image and run Airbyte's standard tests
@@ -35,7 +37,7 @@ jobs:
         run: ./bin/build-image.sh
       - name: The image must run spec with no network access
         run: |
-          docker run --rm --network none datazoo/source-sap:dev spec > spec.jsonl
+          docker run --rm --network none airbyte/source-sap:dev spec > spec.jsonl
           grep -q '"type":"SPEC"' spec.jsonl
 
   e2e:
@@ -63,8 +65,10 @@ jobs:
       ERPL_E2E_REQUIRED: "1"
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - run: uv sync --frozen
+      - uses: snok/install-poetry@v1
+        with:
+          version: 1.8.5
+      - run: poetry install --all-extras
       - name: Fetch the ERPL extensions
         run: ./bin/fetch-extensions.sh "$PWD/.erpl"
       - name: Airbyte standard connector tests
@@ -73,7 +77,7 @@ jobs:
           export LD_LIBRARY_PATH="$PWD/.erpl/v1.5.5/linux_amd64"
           ./bin/write-secrets.sh
           ./bin/build-image.sh
-          uv run pytest integration_tests -q --connector-image datazoo/source-sap:dev
+          poetry run pytest integration_tests -q --connector-image airbyte/source-sap:dev
 
       - name: Run the e2e suite
         run: |
@@ -82,11 +86,11 @@ jobs:
           # Fails the job if any protocol would silently skip for want of a
           # variable, rather than reporting green on a suite that did not run.
           export ERPL_E2E_REQUIRED=1
-          uv run pytest e2e -q -m "not slow"
+          poetry run pytest e2e -q -m "not slow"
 
       - name: Volume tests
         # Six-figure extracts; kept out of the fast lane.
         run: |
           export ERPL_EXTENSION_DIR="$PWD/.erpl"
           export LD_LIBRARY_PATH="$PWD/.erpl/v1.5.5/linux_amd64"
-          uv run pytest e2e -q -m slow
+          poetry run pytest e2e -q -m slow
