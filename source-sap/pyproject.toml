@@ -60,4 +60,5 @@ addopts = "-m 'not requires_creds'"
 markers = [
     "requires_creds: needs a live SAP system (the local a4h ABAP trial)",
     "slow: long-running test",
+    "image_tests: runs the built connector image with docker",
 ]
