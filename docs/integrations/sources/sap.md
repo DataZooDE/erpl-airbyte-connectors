@@ -13,34 +13,59 @@ extensions. One connector covers four SAP interfaces; you pick one per connectio
 
 ## Prerequisites
 
-- A SAP NetWeaver or S/4HANA system reachable from where Airbyte runs.
-- A SAP user with the **Client** and **User** you will configure, plus a **Password**
-  (or an SNC identity).
-- Authorization object **`S_RFC`** for the function groups the connector calls:
-  `RFC_READ_TABLE` and `DDIF_FIELDINFO_GET` for the RFC protocol, `RODPS_REPL_*`
-  for ODP, and the BICS function group for BW.
-- For **SAP ODP (OData)**: the **Gateway Base URL** (for example
-  `https://sap.example.com:44300`) and an activated ODP OData service.
-- If the system sits behind a SAProuter, its **SAProuter String**, plus
-  **SAProuter Host** — the bare hostname, which is what the platform needs to
-  allow egress (a `/H/…/S/…` route string is not a hostname).
+- A SAP NetWeaver or S/4HANA system reachable from wherever Airbyte runs.
+- A service user in the client you want to replicate. A user type of
+  *Communication* (`C`) is enough, and its password should be set not to expire —
+  otherwise the sync fails on the day it lapses.
+- Authorization object **`S_RFC`** for the function groups the connector calls.
+  The minimum by protocol:
 
-Either a direct logon (**Application Server Host** + **System Number**) or a
-load-balanced logon (**Message Server Host** + **System ID** + **Logon Group**) is required.
+  | Protocol | Function groups / modules |
+  |---|---|
+  | Tables and CDS views | `RFC_READ_TABLE` (or a custom equivalent), `DDIF_FIELDINFO_GET` |
+  | Function modules | `RPY_FUNCTIONMODULE_READ`, plus every module you configure |
+  | BW queries | `BICS_CONS_CREATE_DATA_AREA`, `BICS_PROV_OPEN`, `BICS_PROV_GET_INITIAL_STATE`, `BICS_PROV_SET_STATE`, `BICS_PROV_GET_RESULT_SET`, `BICS_PROV_VAR_GET_VARIABLES`, `BICS_PROV_CLOSE` |
+  | ODP over RFC | the `RODPS_REPL_*` group (`..._CONTEXT_GET_LIST`, `..._ODP_GET_LIST`, `..._ODP_OPEN`, `..._ODP_FETCH`, `..._ODP_CLOSE`) |
+  | ODP over the Gateway | an activated ODP OData service, reachable over HTTPS |
+
+  BW additionally checks its own analysis authorizations (`S_RS_COMP`,
+  `S_RS_AUTH`) on the InfoProvider — a BW question, granted as it would be for a
+  person running the query. The full list, with every module the connector can
+  call, is in [authorizations](https://github.com/DataZooDE/erpl-airbyte/blob/main/docs/authorizations.md).
+
+Fill in **either** a direct logon or a load-balanced one:
+
+| Setting | Needed for | Notes |
+|---|---|---|
+| **Application Server Host** + **System Number** | direct logon | the usual choice |
+| **Message Server Host** + **System ID** + **Logon Group** | load-balanced logon | use instead of the two above |
+| **Client**, **User**, **Password** | always | password is optional under SNC or SSO2 |
+| **Language** | optional | two letters; only affects field texts |
+| **Gateway Base URL** | ODP over OData | scheme and port, e.g. `https://sap.example.com:44300` |
+| **SAProuter String** + **SAProuter Host** | behind a SAProuter | the string is the `/H/…/S/…` route; the host is the bare hostname, which is what the platform needs to allow egress |
+| **Enable SNC**, **SNC Partner Name**, **SNC Library Path**, **SNC Quality of Protection** | encrypted RFC | see Security below |
 
 ## Setup guide
 
-1. In Airbyte, create a new source and choose **SAP**.
-2. Fill in the logon fields above.
+### For Airbyte Cloud:
+
+This connector is **not available on Airbyte Cloud**. It loads native DuckDB
+extensions and speaks SAP's RFC protocol, which needs network access to a system
+inside your own landscape. Run it on Airbyte Open Source or Self-Managed.
+
+### For Airbyte Open Source:
+
+1. Create a new source and choose **SAP**.
+2. Fill in the logon fields from the table above.
 3. Choose a **Protocol** and tell the connector what to read:
-   - a **pattern** (`table_pattern`, `query_pattern`, `name_pattern`, `service_pattern`)
-     to discover objects in bulk, and/or
+   - a **pattern** (`table_pattern`, `query_pattern`, `name_pattern`,
+     `service_pattern`) to discover objects in bulk, and/or
    - an explicit **objects** list, which is also where per-object settings live
      (columns, SAP-side filters, cursor field, BEx variables, ODP subscriber name).
 4. Run the connection test, then **Set up source** and refresh the schema.
 
-BEx queries with mandatory variables must be listed explicitly with those variables
-bound — BW refuses to return a result until they have values.
+BEx queries with mandatory variables must be listed explicitly with those
+variables bound — BW refuses to return a result until they have values.
 
 ## Calling function modules
 
@@ -113,7 +138,7 @@ by a *subscriber process*. Two consequences:
   it in transaction `ODQMON`.
 :::
 
-## Supported streams
+## Supported Streams
 
 Streams are whatever your pattern and object list select. Stream names are:
 
@@ -133,7 +158,7 @@ Streams are whatever your pattern and object list select. Stream names are:
   wide and a narrow extract. The connector scales the SAP fetch budget with the
   partition count automatically, which removed one cause of that; a further
   penalty remains unexplained. Raise it only with a measurement in hand. Rows then arrive in an unspecified order, which does not affect
-  correctness. See [performance](../../performance.md).
+  correctness. See [performance](https://github.com/DataZooDE/erpl-airbyte/blob/main/docs/performance.md).
 - **Threads** (ODP) parallelises full extractions. Delta extractions always run
   single-threaded: a parallel multi-package delta can under-count.
 - **Concurrency** controls how many streams are read at once. Each worker holds a
@@ -141,6 +166,28 @@ Streams are whatever your pattern and object list select. Stream names are:
 - **BICS cannot paginate** — BW materialises the entire result set or none of it.
   For a large cube, use **Slice By** to run one BICS session per characteristic
   member and bound memory.
+
+## Data type map
+
+SAP's DDIC types are mapped to JSON Schema as follows. Anything not listed
+arrives as a string, which is lossless.
+
+| SAP (DDIC) | Airbyte type | Notes |
+|---|---|---|
+| `CHAR`, `STRING`, `LANG`, `CUKY`, `UNIT`, `CLNT` | `string` | |
+| `NUMC`, `ACCP` | `string` | leading zeros are significant, so these stay text |
+| `INT1`, `INT2`, `INT4`, `INT8` | `integer` | |
+| `DEC`, `CURR`, `QUAN`, `DECF16`, `DECF34` | `number` (big) | exact decimals; a `DEC` with no decimal places becomes an integer |
+| `FLTP` | `number` | |
+| `DATS` | `date` | `YYYYMMDD` on the wire |
+| `TIMS` | `time` | `HHMMSS` on the wire |
+| `UTCLONG`, `UTCL`, `UTCS`, `UTCM` | `date-time` | |
+| `RAW`, `LRAW`, `RAWSTRING` | `string` (base64) | |
+
+ODP streams additionally carry `_ab_cdc_deleted_at`, set when SAP reports a row
+as deleted — provided the provider reports deletes at all. Over the Gateway an
+entity set without a change-mode column cannot, and discovery warns when it finds
+one.
 
 ## Security notes
 
@@ -157,12 +204,26 @@ Streams are whatever your pattern and object list select. Stream names are:
   sends credentials in the clear. Both are fine against a local trial system and
   wrong against anything else: enable SNC and use `https` in production.
 
-## Limitations
+## Limitations & Troubleshooting
 
 - The connector image is **linux/amd64 only**; ERPL publishes no arm64 build.
 - BICS exposes no change tracking, so BW queries are full-refresh only.
 - ODP OData catalog discovery depends on the Gateway catalog service, which is not
   reachable on every release. List entity-set URLs explicitly if discovery finds nothing.
+
+### Common failures
+
+| Symptom | Cause and fix |
+|---|---|
+| `RFC_ERROR_LOGON_FAILURE` | Wrong client, user or password, or the password expired. Service users should be type *Communication* with a non-expiring password. |
+| `No authorization to access Function Group` | `S_RFC` is missing the group in the Prerequisites table. The message names the group. |
+| `ILLEGAL_REQ_STATE_FOR_CONFIRM` on an ODP delta | A previous run failed mid-fetch and SAP would not close its cursor. The next run recovers it; `PRAGMA sap_odp_drop` clears it sooner. |
+| A BW query returns no rows and logs a variable warning | A mandatory BEx variable is unbound. `RSRT` shows which; bind it in the object's `variables`. |
+| `Failed to initialise the ERPL extensions` | The image is missing its native artefacts — not a SAP problem. |
+| A sync is killed with no error | Out of memory. One wide stream needs ~1.7 GB, and concurrency multiplies it. |
+
+More, including stranded ODP subscriptions and how to reset a stream, in
+[troubleshooting](https://github.com/DataZooDE/erpl-airbyte/blob/main/docs/troubleshooting.md) and [operations](https://github.com/DataZooDE/erpl-airbyte/blob/main/docs/operations.md).
 
 ## Changelog
 

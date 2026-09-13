@@ -4,6 +4,53 @@ A measured readiness assessment, not an estimate. Everything below was produced
 by running Airbyte's own tooling against this connector, or by reading the code
 that will run it. Claims that came from review rather than execution are marked.
 
+## Current state
+
+Measured on a clean checkout (`git archive HEAD`), because the checks walk the
+directory on disk and a local `secrets/config.json` otherwise shows up as an
+HTTPS offender that no checkout would have:
+
+**2 failed, 16 passed, 12 skipped, 0 errored — down from 9 failed and 1 errored.**
+
+| Remaining failure | Status |
+|---|---|
+| `Connectors must be licensed under MIT or Elv2` | Out of scope by instruction; see the last section. |
+| `Python connectors must not use a Dockerfile` | Waiting on one thing: publishing `erpl-extensions` to PyPI. |
+
+The Dockerfile is the last technical item and it is *coupled*, not forgotten.
+Deleting it is a two-line change, but until the wheel is on PyPI and declared as
+a dependency, an image built from Airbyte's template would contain no ERPL
+extensions at all. The order is: publish the wheel, add the dependency, relock,
+delete the Dockerfile, switch `bin/build-image.sh` and CI to
+`airbyte-cdk image build`.
+
+What was done, and what it cost:
+
+- **Packaging** converted from uv to legacy Poetry, the version Airbyte pins
+  (1.8.5). This cleared four failures and the one error at once.
+- **`[tool.poe]`** added — invisible to the QA checks, but every Airbyte CI step
+  is a poe task and none of them run without it.
+- **`erpl-extensions`**, a new package in `packages/`, carries the 194 MB payload
+  as a platform-tagged wheel (72 MB compressed, one file, under PyPI's limit).
+  Verified end to end: with the wheel and the connector pip-installed and a bare
+  environment (`env -i`), `check` against the live system reports *Connected to
+  SAP via RFC (PONG)*.
+- **Extension loading** is resolved from code, preferring the sidecar package,
+  with the SAP and ICU shared objects preloaded via `RTLD_GLOBAL` — because the
+  generated image sets no `ENV` and `LD_LIBRARY_PATH` cannot be set after start.
+- **0.1.0**, `airbyte/source-sap`, `icon.svg`, PyPI declaration, HTTPS comments,
+  `build/` untracked.
+- **Test contract**: credentialed acceptance categories bypassed with reasons,
+  `integrationTests` dropped, and one image test that fails when the extensions
+  are missing — proven to fail, not assumed to.
+- **Documentation**: `sap.md` stands alone — no relative links out of the file,
+  a Cloud/Open-Source split, a data-type map, an inlined `S_RFC` table and a
+  troubleshooting table.
+
+Still open, and not blocking the above: the arm64 question (Airbyte publishes
+`linux/amd64,linux/arm64`; ERPL builds only amd64), and the three questions for
+Airbyte's maintainers below.
+
 ## How to reproduce this assessment
 
 Airbyte's QA checks ship as a public PyPI package:
