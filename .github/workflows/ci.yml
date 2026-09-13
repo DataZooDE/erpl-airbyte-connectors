@@ -17,8 +17,6 @@ jobs:
       - uses: snok/install-poetry@v1
         with:
           version: 1.8.5
-        with:
-          enable-cache: true
       - run: poetry install --all-extras
       - run: poetry run ruff check .
       - run: poetry run ruff format --check .
@@ -32,6 +30,10 @@ jobs:
         working-directory: source-sap
     steps:
       - uses: actions/checkout@v4
+      - uses: snok/install-poetry@v1
+        with:
+          version: 1.8.5
+      - run: poetry install --all-extras
       - uses: docker/setup-buildx-action@v3
       - name: Build
         run: ./bin/build-image.sh
@@ -39,6 +41,10 @@ jobs:
         run: |
           docker run --rm --network none airbyte/source-sap:dev spec > spec.jsonl
           grep -q '"type":"SPEC"' spec.jsonl
+      - name: Airbyte standard connector tests
+        run: poetry run airbyte-cdk image test --no-creds
+      - name: The image must carry its extensions
+        run: poetry run pytest integration_tests/test_image_carries_its_extensions.py -v
 
   e2e:
     name: End-to-end against the SAP sandbox

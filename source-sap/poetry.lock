@@ -744,6 +744,16 @@ files = [
 packaging = ">=20.9"
 
 [[package]]
+name = "erpl-extensions"
+version = "2026.9.4"
+description = "The ERPL DuckDB extensions and the SAP NetWeaver RFC libraries they link against, as an installable package."
+optional = false
+python-versions = ">=3.11"
+files = [
+    {file = "erpl_extensions-2026.9.4-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:84cc9cca16c54c23d0feab2d2032365926db4fa7a3dcbec0144ff1a5192d4047"},
+]
+
+[[package]]
 name = "genson"
 version = "1.3.0"
 description = "GenSON is a powerful, user-friendly JSON Schema generator."
@@ -3202,4 +3212,4 @@ files = [
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.11,<3.14"
-content-hash = "1a1b3b557069c03b2b81ddf4fbf3f5807f8ac817492e91583e37ca51c947ffc2"
+content-hash = "5cff8b8325395d80917810a13f40bedf42843301d3ec8e7d3443e33cb02bcb23"

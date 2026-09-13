@@ -27,6 +27,7 @@ duckdb = ">=1.5.5,<2"
 # transitively through the CDK today, which makes it an undeclared dependency
 # one CDK release away from vanishing.
 orjson = ">=3.10"
+erpl-extensions = ">=2026.9.4"
 
 [tool.poetry.scripts]
 # The generated image's entrypoint invokes this script by the connector's kebab
