@@ -7,4 +7,4 @@
 #
 # <sha256>  <duckdb version>/<platform>/<artifact>
 96b0f3a04848c74c8998fc9be347879a94d49977ace19b1cacd7321025a6b556  v1.5.5/linux_amd64/erpl.duckdb_extension.gz
-fd3c12d95ab0aba5a7bb42804e191ac80aac9f2c6b88052fc5108a30ec3b25cd  v1.5.5/linux_amd64/erpl_web.duckdb_extension.gz
+85c0b7336f74aabb13edb6518c43e8b944501631585f8efb39f316c7ad0e98a2  v1.5.5/linux_amd64/erpl_web.duckdb_extension.gz

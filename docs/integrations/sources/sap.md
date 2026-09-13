@@ -168,4 +168,4 @@ Streams are whatever your pattern and object list select. Stream names are:
 
 | Version | Date | Pull Request | Subject |
 |---|---|---|---|
-| 1.0.0 | 2026-09-12 | — | Rewrite as a single `source-sap` connector: adds BICS, ODP over RFC and ODP over OData alongside the existing table reads; moves to the Concurrent CDK with incremental sync, parameterised credentials and extensions baked into the image. |
+| 0.1.0 | 2026-09-12 | — | Rewrite as a single `source-sap` connector: adds BICS, ODP over RFC and ODP over OData alongside the existing table reads; moves to the Concurrent CDK with incremental sync, parameterised credentials and extensions baked into the image. |

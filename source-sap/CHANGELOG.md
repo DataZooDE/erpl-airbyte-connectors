@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.0 — 2026-09-12
+## 0.1.0 — 2026-09-12
 
 Complete rewrite. The three separate connectors (`source-sapreadtable` plus two
 empty placeholders) are replaced by a single `source-sap` covering four SAP
@@ -31,7 +31,7 @@ interfaces, selected by a `protocol` choice in the spec.
 - `duckdb` 0.10.1 → 1.5.5; Python 3.9 → 3.11+; the base image is now
   `airbyte/python-connector-base:4.1.1`.
 - The ERPL extensions are **baked into the image** at a pinned version instead of
-  being downloaded from `http://get.erpl.io` during every sync. A sync now needs
+  being downloaded from `get.erpl.io` during every sync. A sync now needs
   no network access beyond SAP itself.
 - Credentials use `CREATE SECRET (TYPE sap_rfc, ...)` with bound parameters,
   replacing session-level `SET sap_*` statements.

@@ -70,7 +70,7 @@ class OdpODataDriver(ProtocolDriver):
         return f"Reached the SAP Gateway at {base_url} (HTTP {status} for {probe})."
 
     def warn_about_insecure_transport(self) -> None:
-        if (self.config.get("base_url") or "").strip().lower().startswith("http://"):
+        if (self.config.get("base_url") or "").strip().lower().startswith("http://"):  # ignore-https-check
             logger.warning(
                 "The SAP Gateway base URL uses plain http, so the password and all extracted "
                 "data travel in the clear. Use https for anything other than a local test system."
@@ -141,7 +141,7 @@ class OdpODataDriver(ProtocolDriver):
         """
         base_url = self._base_url()
         text = str(url).strip()
-        if not text.lower().startswith(("http://", "https://")):
+        if not text.lower().startswith(("http://", "https://")):  # ignore-https-check
             return base_url.rstrip("/") + "/" + text.lstrip("/")
         base, target = urlsplit(base_url), urlsplit(text)
         if (target.scheme, target.netloc) != (base.scheme, base.netloc):
