@@ -43,18 +43,18 @@ class TestSessionWorkflow:
         stmts = d.session_statements(self._obj())
         begin = stmts[0]
         assert "sap_bics_begin('MY_CUBE'" in begin
-        assert "'ZVAR_YEAR' AS NAME" in begin
-        assert "'2026' AS LOW" in begin
+        assert "'NAME': 'ZVAR_YEAR'" in begin
+        assert "'LOW': '2026'" in begin
 
     def test_variable_defaults_to_include_equals(self):
         d = driver(objects=[{"name": "Q1", "cube": "MY_CUBE", "variables": [{"name": "V", "low": "1"}]}])
         begin = d.session_statements(self._obj())[0]
-        assert "'I' AS SIGN" in begin and "'EQ' AS OP" in begin
+        assert "'SIGN': 'I'" in begin and "'OP': 'EQ'" in begin
 
     def test_interval_variable_uses_between(self):
         d = driver(objects=[{"name": "Q1", "cube": "MY_CUBE", "variables": [{"name": "V", "low": "1", "high": "9"}]}])
         begin = d.session_statements(self._obj())[0]
-        assert "'BT' AS OP" in begin and "'9' AS HIGH" in begin
+        assert "'OP': 'BT'" in begin and "'HIGH': '9'" in begin
 
     def test_rows_and_columns_become_axis_calls(self):
         d = driver(objects=[{"name": "Q1", "cube": "MY_CUBE", "rows": ["0CALDAY"], "columns": ["0AMOUNT"]}])
@@ -78,7 +78,7 @@ class TestSessionWorkflow:
     def test_variable_values_are_escaped(self):
         d = driver(objects=[{"name": "Q1", "cube": "MY_CUBE", "variables": [{"name": "V", "low": "a' OR '1'='1"}]}])
         begin = d.session_statements(self._obj())[0]
-        assert "'a'' OR ''1''=''1' AS LOW" in begin
+        assert "'LOW': 'a'' OR ''1''=''1'" in begin
 
 
 class TestSlicing:
@@ -198,8 +198,8 @@ class TestBicsIncremental:
             self._obj(cursor_variable="ZVAR_MONTH", cursor_field="0CALMONTH"),
             state={"0CALMONTH": "202603"},
         )
-        assert "'ZVAR_MONTH' AS NAME" in stmts[0]
-        assert "'202603' AS LOW" in stmts[0]
+        assert "'NAME': 'ZVAR_MONTH'" in stmts[0]
+        assert "'LOW': '202603'" in stmts[0]
 
     def test_the_watermark_uses_a_greater_or_equal_style_selection(self):
         d = self._driver(cursor_variable="ZVAR_MONTH", cursor_field="0CALMONTH")
@@ -208,12 +208,12 @@ class TestBicsIncremental:
             state={"0CALMONTH": "202603"},
         )
         # BW's selection options: GE is the watermark shape.
-        assert "'GE' AS OP" in stmts[0]
+        assert "'OP': 'GE'" in stmts[0]
 
     def test_without_state_the_configured_start_is_used(self):
         d = self._driver(cursor_variable="ZVAR_MONTH", cursor_field="0CALMONTH", cursor_start="202601")
         stmts = d.session_statements(self._obj(cursor_variable="ZVAR_MONTH", cursor_field="0CALMONTH"), state={})
-        assert "'202601' AS LOW" in stmts[0]
+        assert "'LOW': '202601'" in stmts[0]
 
     def test_without_state_or_a_start_the_variable_is_left_unset(self):
         d = self._driver(cursor_variable="ZVAR_MONTH", cursor_field="0CALMONTH")
@@ -228,7 +228,7 @@ class TestBicsIncremental:
             self._obj(cursor_variable="ZVAR_MONTH", cursor_field="0CALMONTH"),
             state={"0CALMONTH": "202603"},
         )
-        assert "'ZVAR_REGION' AS NAME" in stmts[0] and "'ZVAR_MONTH' AS NAME" in stmts[0]
+        assert "'NAME': 'ZVAR_REGION'" in stmts[0] and "'NAME': 'ZVAR_MONTH'" in stmts[0]
 
     def test_the_watermark_value_is_escaped(self):
         d = self._driver(cursor_variable="ZVAR_MONTH", cursor_field="0CALMONTH")
@@ -269,3 +269,58 @@ class TestSetupTravelsWithEveryPlan:
         d = driver(objects=[{"name": "Q", "cube": "C"}])
         (plan,) = d.read_plans(None, self._obj(), incremental=False, state={})
         assert "setup" not in plan.slice_
+
+
+class TestTheGeneratedSqlActuallyParses:
+    """Asserting substrings proves we built a string, not a statement.
+
+    The BEx variables block rendered `{'NAME': 'V', ...}`, which is not DuckDB
+    struct syntax: it fails at the parser, before reaching SAP. Every test here
+    checked for substrings and passed. Parsing the statement is the assertion
+    that could have failed.
+    """
+
+    @staticmethod
+    def _statements(**obj):
+        d = driver(objects=[{"name": "Q", "cube": "C", **obj}])
+        target = SapObject(name="Q", json_schema={}, meta={"cube": "C", "query": "Q", "session_id": "s"})
+        return d.session_statements(target)
+
+    @staticmethod
+    def _parses(statement):
+        import duckdb
+
+        # EXPLAIN parses and binds without executing; an unknown table function
+        # is a binder error, which is not what this is looking for.
+        try:
+            duckdb.connect().execute(f"EXPLAIN {statement}")
+        except Exception as exc:
+            message = str(exc)
+            if "Parser Error" in message or "syntax error" in message:
+                raise AssertionError(f"{message.splitlines()[0]}\n  in: {statement}") from exc
+
+    def test_a_plain_session_parses(self):
+        for statement in self._statements():
+            self._parses(statement)
+
+    def test_bex_variables_parse(self):
+        for statement in self._statements(query="Q", variables=[{"name": "0CALMONTH", "low": "202601"}]):
+            self._parses(statement)
+
+    def test_a_ranged_variable_parses(self):
+        variables = [{"name": "V", "low": "a", "high": "b", "sign": "I", "op": "BT"}]
+        for statement in self._statements(query="Q", variables=variables):
+            self._parses(statement)
+
+    def test_rows_columns_and_filters_parse(self):
+        statements = self._statements(
+            rows=["0CALMONTH"],
+            columns=["0AMOUNT"],
+            filters=[{"characteristic": "0COMP_CODE", "members": ["1000", "2000"]}],
+        )
+        for statement in statements:
+            self._parses(statement)
+
+    def test_a_variable_still_carries_its_fields(self):
+        begin = self._statements(query="Q", variables=[{"name": "0CALMONTH", "low": "202601"}])[0]
+        assert "'NAME': '0CALMONTH'" in begin and "'LOW': '202601'" in begin

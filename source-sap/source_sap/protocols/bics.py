@@ -262,15 +262,18 @@ class BicsDriver(ProtocolDriver):
                 low = str(var.get("low", ""))
                 high = str(var.get("high", ""))
                 op = var.get("op") or ("BT" if high else "EQ")
+                # `{'NAME': 'V', ...}`, not `{'V' AS NAME, ...}`: the latter is not
+                # DuckDB struct syntax and fails to parse before it ever reaches
+                # SAP. Every test here asserted substrings, so nothing noticed.
                 rendered.append(
                     "{"
                     + ", ".join(
                         [
-                            f"{_lit(var.get('name', ''))} AS NAME",
-                            f"{_lit(var.get('sign', 'I'))} AS SIGN",
-                            f"{_lit(op)} AS OP",
-                            f"{_lit(low)} AS LOW",
-                            f"{_lit(high)} AS HIGH",
+                            f"'NAME': {_lit(var.get('name', ''))}",
+                            f"'SIGN': {_lit(var.get('sign', 'I'))}",
+                            f"'OP': {_lit(op)}",
+                            f"'LOW': {_lit(low)}",
+                            f"'HIGH': {_lit(high)}",
                         ]
                     )
                     + "}"
