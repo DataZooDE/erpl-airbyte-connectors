@@ -286,5 +286,5 @@ With ELv2, all 30 Airbyte local connector QA checks (`airbyte-internal-ops`) pas
 - **12 SKIPPED** (Support-level 300 certified-tier structural checks)
 - **0 FAILED**
 
-**Upstream Pull Request:** [airbytehq/airbyte#85861](https://github.com/airbytehq/airbyte/pull/85861)
+**Upstream Pull Request:** [airbytehq/airbyte#85863](https://github.com/airbytehq/airbyte/pull/85863)
 
