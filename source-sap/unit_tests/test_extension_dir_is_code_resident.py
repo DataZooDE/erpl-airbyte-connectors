@@ -11,12 +11,26 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
-from source_sap.session import bundled_extension_dir, default_extension_dir
+from source_sap.session import bundled_extension_dir, default_extension_dir, sidecar_extension_dir
 
 
 class TestWithNoEnvironment:
-    def test_falls_back_to_the_directory_beside_the_package(self):
+    def test_prefers_the_installed_sidecar_package(self):
+        # erpl-extensions ships the binaries as an ordinary dependency, so they
+        # land in site-packages -- inside /usr/local, which is what the
+        # generated image copies out of its builder stage.
         with patch.dict(os.environ, {}, clear=True):
+            sidecar = sidecar_extension_dir()
+            if sidecar is not None:
+                assert default_extension_dir() == str(sidecar)
+            else:
+                assert default_extension_dir() == str(bundled_extension_dir())
+
+    def test_falls_back_to_the_directory_beside_the_package(self):
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("source_sap.session.sidecar_extension_dir", return_value=None),
+        ):
             assert default_extension_dir() == str(bundled_extension_dir())
 
     def test_that_directory_is_inside_the_installed_package(self):
@@ -29,6 +43,15 @@ class TestWithNoEnvironment:
     def test_no_longer_points_at_a_path_the_image_will_not_have(self):
         with patch.dict(os.environ, {}, clear=True):
             assert default_extension_dir() != "/airbyte/duckdb_extensions"
+
+    def test_an_unpopulated_sidecar_is_not_used(self):
+        # A wheel built without its payload installs cleanly; using it anyway
+        # would fail much later, inside DuckDB, talking about an extension.
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("source_sap.session.sidecar_extension_dir", return_value=None),
+        ):
+            assert default_extension_dir() == str(bundled_extension_dir())
 
 
 class TestTheOverrideStillWins:

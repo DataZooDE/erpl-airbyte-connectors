@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "erpl-extensions"
+version = "2026.9.4"
+description = "The ERPL DuckDB extensions and the SAP NetWeaver RFC libraries they link against, as an installable package."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "BUSL-1.1" }
+authors = [{ name = "DataZoo GmbH", email = "info@data-zoo.de" }]
+keywords = ["duckdb", "sap", "erpl", "rfc", "odp", "bics"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Database",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://erpl.io"
+Repository = "https://github.com/DataZooDE/erpl-airbyte"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/erpl_extensions"]
+
+# The payload is fetched at build time by bin/build-wheel.sh, not committed.
+artifacts = ["src/erpl_extensions/_files/**"]

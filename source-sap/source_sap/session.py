@@ -44,14 +44,35 @@ def bundled_extension_dir() -> Path:
     return Path(__file__).resolve().parent / _BUNDLED_EXTENSION_DIRNAME
 
 
+def sidecar_extension_dir() -> Path | None:
+    """The directory shipped by the `erpl-extensions` package, if installed.
+
+    That package carries the binaries as an ordinary dependency, so pip puts
+    them in site-packages -- inside /usr/local, which is exactly what the
+    generated connector image copies out of its builder stage.
+    """
+    try:
+        from erpl_extensions import extension_dir, is_populated
+    except ImportError:
+        return None
+    # A wheel built without its payload installs cleanly; using it anyway would
+    # fail much later, inside DuckDB, in a message about extensions rather than
+    # about packaging.
+    return extension_dir() if is_populated() else None
+
+
 def default_extension_dir() -> str:
-    """Where to look for the ERPL extensions, environment first.
+    """Where to look for the ERPL extensions: environment, sidecar, bundled.
 
     Read per session rather than at import: a module constant would freeze
     whatever the environment happened to be when the module was first imported,
     which is both untestable and wrong for a long-lived process.
     """
-    return (os.environ.get("ERPL_EXTENSION_DIR") or "").strip() or str(bundled_extension_dir())
+    configured = (os.environ.get("ERPL_EXTENSION_DIR") or "").strip()
+    if configured:
+        return configured
+    sidecar = sidecar_extension_dir()
+    return str(sidecar if sidecar is not None else bundled_extension_dir())
 
 
 ALL_EXTENSIONS = ("erpl_rfc", "erpl_bics", "erpl_odp", "erpl_web")
