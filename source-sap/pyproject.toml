@@ -14,7 +14,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://erpl.io"
-Repository = "https://github.com/DataZooDE/erpl-airbyte-connectors"
+Repository = "https://github.com/DataZooDE/erpl-airbyte"
 Documentation = "https://docs.airbyte.com/integrations/sources/sap"
 
 [project.scripts]

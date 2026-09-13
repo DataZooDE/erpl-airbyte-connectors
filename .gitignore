@@ -25,3 +25,7 @@ spikes/*.db
 *rfc*.trc
 dev_rfc.log
 .crew/
+
+# Editor state: the launch configs here pointed at a connector deleted in the
+# rewrite, so they broke silently. Keep editor settings out of the repo.
+.vscode/
