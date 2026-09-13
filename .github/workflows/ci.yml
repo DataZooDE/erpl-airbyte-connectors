@@ -3,7 +3,12 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
+
+permissions:
+  contents: read
+  packages: write
 
 jobs:
   static:
@@ -44,6 +49,33 @@ jobs:
         run: poetry run airbyte-cdk image test --no-creds
       - name: The image must carry its extensions
         run: poetry run pytest integration_tests/test_image_carries_its_extensions.py -v
+      - name: The image must run check smoke test
+        run: |
+          echo '{"ashost": "127.0.0.1", "sysnr": "00", "client": "001", "user": "SMOKE_TEST", "password": "FAKE", "protocol": {"mode": "rfc", "table_pattern": "SFLIGHT"}}' > /tmp/smoke-config.json
+          OUTPUT=$(docker run --rm -v /tmp/smoke-config.json:/config.json airbyte/source-sap:dev check --config /config.json)
+          rm -f /tmp/smoke-config.json
+          echo "$OUTPUT"
+          echo "$OUTPUT" | grep -q '"connectionStatus":{"status":"FAILED"'
+          echo "$OUTPUT" | grep -q 'SAP RFC connection test failed'
+      - name: Log in to GitHub Container Registry
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish Docker image to GHCR
+        if: github.event_name == 'push'
+        run: |
+          OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          GHCR_REPO="ghcr.io/${OWNER_LC}/source-sap"
+          TAG="$(python3 -c "import re,pathlib;print(re.search(r'dockerImageTag: (\S+)', pathlib.Path('metadata.yaml').read_text()).group(1))")"
+          docker tag airbyte/source-sap:dev "${GHCR_REPO}:${TAG}"
+          docker tag airbyte/source-sap:dev "${GHCR_REPO}:latest"
+          docker tag airbyte/source-sap:dev "${GHCR_REPO}:2026.9.4"
+          docker push "${GHCR_REPO}:${TAG}"
+          docker push "${GHCR_REPO}:latest"
+          docker push "${GHCR_REPO}:2026.9.4"
 
   e2e:
     name: End-to-end against the SAP sandbox

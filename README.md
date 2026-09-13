@@ -27,8 +27,8 @@ arm64 build.
 In Airbyte: **Settings → Sources → Add a new connector**
 
 ```
-Docker repository:  datazoo/source-sap
-Docker image tag:   1.0.0
+Docker repository:  ghcr.io/datazoode/source-sap
+Docker image tag:   2026.9.4
 ```
 
 Everything below can also be driven from the command line, which is what the
@@ -42,7 +42,7 @@ Five steps. The second is where SAP systems differ from each other.
 ### 1. See it run — no SAP needed
 
 ```bash
-docker run --rm datazoo/source-sap:1.0.0 spec
+docker run --rm ghcr.io/datazoode/source-sap:2026.9.4 spec
 ```
 
 Prints the connector's configuration schema. If that works, the image is sound
