@@ -59,37 +59,57 @@ an SAP connection. Raising it consumes dialog work processes on the SAP system;
 if your Basis team notices the connector crowding out users, that is the setting
 to lower. It is clamped to 32.
 
+It no longer affects how fast a *single* stream reads. Until v0.2 the connector
+divided DuckDB's thread budget by this number, which made a one-stream sync
+nearly 4x slower at `concurrency: 16` than at 1 — see
+[performance](performance.md). The budget is now fixed at `min(cpu_count, 16)`
+round trips in flight, whatever the concurrency.
+
 Within one stream, `partitions` is off by default and the measurements say leave
 it there — see [performance](performance.md).
 
 ## Sizing the connector container
 
-Two settings multiply into the memory the sync needs, so they are worth reading
-together before raising either:
+Measured, not derived — `bin/probe-layers.py`'s sibling measurements, peak RSS of
+the connector process reading `DD02L` (164,673 rows, 55 columns) on a 32-CPU host:
 
-| | Bound |
-|---|---|
-| `fetch_size` | 64 MiB per SAP round trip, the hard maximum |
-| `concurrency` | 32 streams read at once, the hard maximum |
-| in the worst case | one in-flight buffer per concurrent stream |
+| Case | Peak RSS |
+|---|---:|
+| one stream, all 55 columns, default budget | **1,698 MB** |
+| one stream, 2 of 55 columns | 450 MB |
+| one stream, `fetch_size: 16777216` | 2,936 MB |
+| one stream, `fetch_size: 67108864` | 2,938 MB |
+| two streams at `concurrency: 2` | 3,310 MB |
 
-At both maxima that is **2 GiB of in-flight row buffers**, before DuckDB's own
-working set and the CDK's serialization. Nothing reaches that by default:
-`fetch_size` unset means erpl's own 1.25 MiB budget, and `concurrency` defaults
-to a handful.
+Three things follow.
 
-The combination that gets there by accident is a raised `fetch_size` alongside
+**A wide stream costs about 1.7 GB on its own.** The connector keeps up to 16 SAP
+round trips in flight, each carrying a slice of every projected column, so memory
+tracks the *width* of the extract and the number of in-flight calls — not the row
+count, which is streamed.
+
+**Concurrency multiplies it.** Two concurrent wide streams measured 3,310 MB,
+almost exactly twice one. Budget roughly `1.7 GB × concurrency` for wide tables,
+and remember `concurrency` defaults to 4.
+
+**Projecting columns is also the memory fix.** Two columns instead of 55 cost 450
+MB against 1,698 — the same setting that makes the sync 3.8x faster.
+
+Raising `fetch_size` past 16 MiB buys nothing in either direction: 64 MiB measured
+the same 2.9 GB, because ERPL caps the concurrent-row budget (projected columns ×
+batch size) independently.
+
+The combination that surprises people is a raised `fetch_size` alongside
 `partitions`, because the connector multiplies the budget by the partition count
 (that is what stops each worker starving). An explicit `fetch_size` is *not*
 multiplied — it is taken as the number you meant — so if you set both, set
-`fetch_size` to the total you can afford, not to the per-worker figure. The
-connector warns when an explicit budget divided by the partition count leaves a
-worker under 512 KB.
+`fetch_size` to the total you can afford. The connector warns when an explicit
+budget divided by the partition count leaves a worker under 512 KB.
 
-A connector container with 2 GiB is comfortable for the defaults. If you raise
-`fetch_size` or `concurrency`, raise the container's memory limit in step, or
-the sync is killed by the platform rather than failing with a message you can
-read.
+A container with 2 GiB is enough for one wide stream and nothing else. If you run
+several streams at once, or raise `fetch_size`, raise the memory limit in step —
+otherwise the platform kills the sync, and a killed process looks exactly like a
+short read rather than an error you can act on.
 
 ## Monitoring a sync
 

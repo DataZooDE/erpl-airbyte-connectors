@@ -108,6 +108,19 @@ class HttpBasicCredentials:
         return sql, {"scope": self.scope, "username": self.username, "password": self.password}
 
 
+#: Upper bound on DuckDB's thread pool for this process.
+#:
+#: These threads are not doing CPU work: each one is blocked on an RFC call, so
+#: the budget is really "how many SAP round trips are in flight". Measured on a
+#: 55-column, 164,673-row table, throughput rises near-linearly with it -- 1,479
+#: rows/s at 1 thread, 8,740 at 8, 11,720 at 16, 12,919 at 32 -- so the last
+#: doubling buys 10% for twice the SAP-side load. erpl caches at most 16 RFC
+#: connections itself and its source cites a ~4x effective concurrency ceiling
+#: at the SAP gateway, which is where this number comes from. See
+#: docs/performance.md.
+MAX_DUCKDB_THREADS = 16
+
+
 @dataclass(frozen=True)
 class SessionSettings:
     num_workers: int = 4
@@ -115,8 +128,17 @@ class SessionSettings:
 
     @property
     def duckdb_threads(self) -> int:
-        """Split the machine across Airbyte workers so DuckDB does not oversubscribe."""
-        return max(1, self.cpu_count // max(1, self.num_workers))
+        """How many SAP round trips this process may have in flight.
+
+        Deliberately *not* divided by the Airbyte worker count. Every stream
+        shares one DuckDB instance (see this module's docstring), and DuckDB's
+        scheduler already shares its threads across the queries running on it --
+        so dividing did not prevent oversubscription, it starved the process:
+        a single-stream sync measured 3.9x slower at `concurrency: 16` than at
+        1, for a setting that is supposed to govern how many *streams* run at
+        once.
+        """
+        return max(1, min(self.cpu_count, MAX_DUCKDB_THREADS))
 
 
 class ErplSession:
